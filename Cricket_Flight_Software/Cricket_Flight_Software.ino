@@ -48,7 +48,7 @@ char data_name[20] = "";
 typedef enum {
   STAND_BY,
   TERMINAL_COUNT,   //button activated
-  POWERED_ASCENT,   //if (run_time>0) && (state==TERMINAL_COUNT) && (run_time<BURN_TIME)
+  POWERED_ASCENT,   //if (run_time>0) && (state==TERMINAL_COUNT) && (run_time<BURN_TIME) //end based on acceleration TBD
   UNPOWERED_ASCENT, //if (state==POWERED_ASCENT) && (run_time>BURN_TIME)
   FREEFALL,         //if (state==UNPOWERED_ASCENT) && (Apogee_Passed == 1)
   DROGUE_DESCENT,   //if (state==FREEFALL) && (DROGUE_FIRED==1)
@@ -60,7 +60,7 @@ state_t state = STAND_BY;
 
 bool IS_RISING=0;
 bool IS_FALLING=0;
-int BURN_TIME= 3000; //ms
+int BURN_TIME= 3000; //ms //FIX!
 bool DROGUE_FIRED= 0;
 bool MAIN_FIRED= 0;
 
@@ -129,32 +129,41 @@ char filename[] = "DATA000.csv";
 #define Batt_V_Read 14  %A0
 double reading;
 double vbatt1;
-int voltage_divider_ratio= 6;
+int voltage_divider_ratio= 6; //use 11 if using a 1k resistor instead of a 2k
 
 //Pin setup
 #define LED 13 //Error LED, refers to builtin LED on teensy
-#define PYRO1 24
-#define PYRO2 25
+#define PYRO1 24  //PWM capable
+#define PYRO2 25  //PWM capable
 #define PYRO3 26
 #define PYRO4 27
-#define PYRO5 28  //Camera on/off Pin
+#define PYRO5 28        //Camera on/off Pin
 #define PWM1 2
 #define PWM2 3
 #define PWM3 4
 #define PWM4 5
-#define PWM5 6
-#define PWM6 7
-#define PWM7 8
-#define PWM8 23 //A9
-#define PWM9 22 //A8
-#define PWM10 21 //A7
-#define PWM11 20 //A6
-#define PWM12 17 //A3
-#define PWM13 16 //A2
-#define PWM14 36 //A17
-#define PWM15 35 //A16
+#define PWM5 6          
+#define PWM6 7          //LL1
+#define PWM7 8          //LL2
+#define PWM8 23 //A9    //LL3
+#define PWM9 22 //A8    //LL4
+#define PWM10 21 //A7   //EDF
+#define PWM11 20 //A6     //Free
+#define PWM12 17 //A3   //S1
+#define PWM13 16 //A2   //S2
+#define PWM14 36 //A17  //S3
+#define PWM15 35 //A16  //S4
+
 
 PWMServo S1;
+PWMServo S2;
+PWMServo S3;
+PWMServo S4;
+PWMServo LL1;
+PWMServo LL2;
+PWMServo LL3;
+PWMServo LL4;
+PWMServo EDF;
 
 int pos1 = 90;
 
@@ -434,9 +443,18 @@ void setup() {
   digitalWrite(PYRO5,LOW);
   //this could probably be done w/ a loop in fewer lines
   //so if someone wants to do that that'll work
-
-  S1.attach(PWM1);
+  
+  S1.attach(PWM12);  //17
   //S1.attach(SERVO_PIN_A, 1000, 2000); //some motors need min/max setting ,ESCs go 1k-2k
+  S2.attach(PWM13);  //16
+  S3.attach(PWM14);  //36
+  S4.attach(PWM15);  //35
+  LL1.attach(PWM6);  //7
+  LL2.attach(PWM7);  //8
+  LL3.attach(PWM8);  //23
+  LL4.attach(PWM9);  //22
+  EDF.attach(PWM10); //21
+
   
   for(int q=0; q<10;q++){
     digitalWrite(LED,LOW); delay(100); digitalWrite(LED,HIGH);delay(100); 
@@ -445,15 +463,56 @@ void setup() {
   for(int q=0; q<20;q++){
     digitalWrite(LED,LOW); delay(50); digitalWrite(LED,HIGH);delay(50); 
   }
-  
+
+  //Try to automatically set values for flight
   //Launch_ALT= bmp.readAltitude(SEALEVELPRESSURE_HPA);   //keeps giving 1900m
-  if(gps.satellites.value() > 3){
+  
+  if(gps.satellites.value() > 4){
     gps_alt= gps.altitude.meters();
     launch_lat= gps.location.lat();
     launch_lon= gps.location.lng();
     land_lat= launch_lat + 0.0002;
     land_lon= launch_lon + 0.0002;
   }
+
+
+
+  //Lower Landing Legs
+  LL1.write(0);   //pos1, 0 or 180, etc
+  delay(100);
+  LL2.write(0);
+  delay(100);
+  LL3.write(0);
+  delay(100);
+  LL4.write(0);
+  delay(1000);
+  
+  LL1.write(180);
+  delay(100);
+  LL2.write(180);
+  delay(100);
+  LL3.write(180);
+  delay(100);
+  LL4.write(180);
+  delay(1000);
+
+    
+  //for(pos = 180; pos >=1; pos -= 1){ //close a servo all the way
+  //  S1.write(pos);
+  //  delay(30);
+  //}
+
+
+
+
+
+  //Actuate the Fins
+
+
+
+
+  
+
 
   
 }
@@ -656,7 +715,7 @@ void loop() {
 
   if(millis()-falltimer > fall_dt){
     //state machine:
-    if ( (run_time>0) && (state==TERMINAL_COUNT) && (run_time<BURN_TIME) ){
+    if ( (run_time>0) && (state==TERMINAL_COUNT) && (run_time<BURN_TIME) ){ //FIX!
       SET_STATE(POWERED_ASCENT);
       //launch rocket
       digitalWrite(PYRO3,HIGH);
