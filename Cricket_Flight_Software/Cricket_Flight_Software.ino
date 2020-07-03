@@ -165,7 +165,14 @@ PWMServo LL3;
 PWMServo LL4;
 PWMServo EDF;
 
+int pos;
 int pos1 = 90;
+
+int S1_Offset= 25;  //might need to change to double
+int S2_Offset= 13;
+int S3_Offset= 0;
+int S4_Offset= 0;
+
 
 #define SEND_VECTOR_ITEM(field, value)\
   SEND_ITEM(field, value.x())         \
@@ -444,22 +451,22 @@ void setup() {
   //this could probably be done w/ a loop in fewer lines
   //so if someone wants to do that that'll work
   
-  S1.attach(PWM12);  //17
+  S1.attach(PWM1);  //17
   //S1.attach(SERVO_PIN_A, 1000, 2000); //some motors need min/max setting ,ESCs go 1k-2k
-  S2.attach(PWM13);  //16
+  S2.attach(PWM2);  //16
   S3.attach(PWM14);  //36
   S4.attach(PWM15);  //35
   LL1.attach(PWM6);  //7
   LL2.attach(PWM7);  //8
   LL3.attach(PWM8);  //23
   LL4.attach(PWM9);  //22
-  EDF.attach(PWM10); //21
+  EDF.attach(PWM11); //21
 
   
   for(int q=0; q<10;q++){
     digitalWrite(LED,LOW); delay(100); digitalWrite(LED,HIGH);delay(100); 
   }
-  smartDelay(1000*30);
+  smartDelay(1000*10);
   for(int q=0; q<20;q++){
     digitalWrite(LED,LOW); delay(50); digitalWrite(LED,HIGH);delay(50); 
   }
@@ -477,44 +484,104 @@ void setup() {
 
 
 
+
   //Lower Landing Legs
-  LL1.write(0);   //pos1, 0 or 180, etc
-  delay(100);
-  LL2.write(0);
-  delay(100);
-  LL3.write(0);
-  delay(100);
-  LL4.write(0);
-  delay(1000);
-  
-  LL1.write(180);
-  delay(100);
-  LL2.write(180);
-  delay(100);
-  LL3.write(180);
-  delay(100);
-  LL4.write(180);
-  delay(1000);
-
-    
-  //for(pos = 180; pos >=1; pos -= 1){ //close a servo all the way
-  //  S1.write(pos);
-  //  delay(30);
-  //}
-
-
-
-
+  for(pos = 0; pos <=180; pos += 18){
+      LL1.write(pos);
+      LL2.write(pos);
+      LL3.write(pos);
+      LL4.write(pos);
+      delay(375);
+  }
 
   //Actuate the Fins
+  //1
+  for(pos = 60; pos <=120; pos += 5){
+      S1.write(pos);
+      delay(50);
+  }
+  delay(100);
+  for(pos = 120; pos >=60; pos -= 20){
+      S1.write(pos);
+      delay(200);
+  }
+  delay(200);
+    for(pos = 60; pos <=120; pos += 5){
+      S2.write(pos);
+      delay(50);
+  }
+  delay(100);
+  for(pos = 160; pos >=60; pos -= 20){
+      S2.write(pos);
+      delay(200);
+  }
+  delay(200);
+  for(pos = 60; pos <=120; pos += 5){
+      S3.write(pos);
+      delay(50);
+  }
+  delay(100);
+  for(pos = 120; pos >=60; pos -= 20){
+      S3.write(pos);
+      delay(200);
+  }
+  delay(200);
+    for(pos = 60; pos <=120; pos += 5){
+      S4.write(pos);
+      delay(50);
+  }
+  delay(100);
+  for(pos = 160; pos >=60; pos -= 20){
+      S4.write(pos);
+      delay(200);
+  }
 
 
 
-
+  //2
+  for(pos = 45; pos <=135; pos += 2){
+      S1.write(pos);
+      S3.write(pos);
+      delay(15);
+  }
+  delay(100);
+  for(pos = 135; pos >=45; pos -= 10){
+      S1.write(pos);
+      S3.write(pos);
+      delay(80);
+  }
+  delay(200);
+    for(pos = 45; pos <=135; pos += 2){
+      S2.write(pos);
+      S4.write(pos);
+      delay(15);
+  }
+  delay(100);
+  for(pos = 135; pos >=45; pos -= 10){
+      S2.write(pos);
+      S4.write(pos);
+      delay(80);
+  }
   
+  //all
+  for(pos = 0; pos <=180; pos += 1){
+      //analogWrite(17,pos);
+      S1.write(pos);
+      //analogWrite(16,pos);
+      S2.write(pos);
+      S3.write(pos);
+      S4.write(pos);
+      delay(10);
+  }
+  delay(200);
+  for(pos = 180; pos >=90; pos -= 5){
+      S1.write(pos + S1_Offset);
+      S2.write(pos + S2_Offset);
+      S3.write(pos + S3_Offset);
+      S4.write(pos + S4_Offset);
+      delay(50);
+  }
 
-
-  
 }
 
 
