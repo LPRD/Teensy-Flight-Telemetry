@@ -9,11 +9,11 @@
 #include <Telemetry.h>
 #include <PWMServo.h>
 #include <TimeLib.h>
+#include <Matrix.h>
 
 #define DEMO 0
 #define FLIGHT 2
 
-// Change this line to set configuration
 #define CONFIGURATION FLIGHT    //UPDATE b4 FLIGHT!!!
 
 
@@ -24,11 +24,7 @@ bool cmd; //for pyro channels
 float val; //read value for ground config
 bool P1_setting,P2_setting,P3_setting,P4_setting,P5_setting= 0;
 
-char send1[150]= "";
-char send2[150]= "";
-char send3[150]= "";
-char send4[150]= "";
-
+//char send1[150], send2[150], send3[150], send4[150]= ""; //For Matlab UI
 
 #if CONFIGURATION == DEMO
 #define COUNTDOWN_DURATION 10000 // 10 sec
@@ -36,14 +32,10 @@ char send4[150]= "";
 #define COUNTDOWN_DURATION 60000 // 1 min
 #endif
 
-long abort_time= 0;
-long start_time = 0;
-long run_time= 0;
+long abort_time, start_time, run_time= 0;
 bool ss = true; //ss stands for sensor_status
 
-
-char data[10] = "";
-char data_name[20] = "";
+char data[10], data_name[20] = "";
 
 typedef enum {
   STAND_BY,
@@ -58,11 +50,9 @@ typedef enum {
 
 state_t state = STAND_BY;
 
-bool IS_RISING=0;
-bool IS_FALLING=0;
-int BURN_TIME= 3000; //ms //FIX!
-bool DROGUE_FIRED= 0;
-bool MAIN_FIRED= 0;
+//bool IS_RISING, IS_FALLING= 0;    //May not need
+bool DROGUE_FIRED, MAIN_FIRED =0;
+int BURN_TIME= 3000; //ms //Update b4 Flight!
 
  /*
 // Convenience
@@ -78,7 +68,6 @@ void SET_STATE(state_t STATE){
 }
 // */
 
-
 void (*reset)(void) = 0;
 
 //GPS setup
@@ -92,17 +81,15 @@ TinyGPSPlus gps;
 // 2-5 msgs/s is probably fine for the future, so we want ~600-1500 bytes/s, so no lower than 6000-15000 bits/s baud rate
 //I'm only showing the math here now b/c eventually we will want to lower the radio baud rates to get better range
 #define radio_dt 100 //time in ms between sending telemetry packets
-#define read_dt 100 //time in ms between recieving telemetry packets
-
+#define read_dt 200 //time in ms between recieving telemetry packets
 
 //BMP388 setup
 #define BMP_SCK 13
 #define BMP_MISO 12
 #define BMP_MOSI 11
 #define BMP_CS 15
-
-//UPDATE B4 FLIGHT!!!
-//Calibration Factor for BMP388, chech local pressure b4 flight!
+  //UPDATE B4 FLIGHT!!!
+  //Calibration Factor for BMP388, chech local pressure b4 flight!
 float SEALEVELPRESSURE_HPA= 1014.22; //1013.25;  //in units of 100* Pa
 Adafruit_BMP3XX bmp(BMP_CS, BMP_MOSI, BMP_MISO,  BMP_SCK);  //software SPI
 #define bmp_dt 100 //time in ms between samples for bmp388
@@ -111,19 +98,17 @@ Adafruit_BMP3XX bmp(BMP_CS, BMP_MOSI, BMP_MISO,  BMP_SCK);  //software SPI
 Adafruit_BNO055 bno = Adafruit_BNO055(55, 0x28, &Wire);//ID, Address, Wire
 //use the syntax &Wire1, 2,... for SDA1, 2,... //55 as the only argument also works
 #define bno_dt 50 //time in ms between samples for bno055
-
-//Remaining issues: I haven't been able to get I2C ports on the teensy working
-//other than SDA0 and SCL0... there is some sytax involving "&Wire"
-//above in the BNO setup that I think is supposed to be changed but
-//I have already tried using Wire1 and &Wire1 but the BNO
-//didnt give data when I connected it to the SCL1/SDA1 ports on the
-//teensy... long story short I could use some help here
-
+  //Remaining issues: I haven't been able to get I2C ports on the teensy working
+  //other than SDA0 and SCL0... there is some sytax involving "&Wire"
+  //above in the BNO setup that I think is supposed to be changed but
+  //I have already tried using Wire1 and &Wire1 but the BNO
+  //didnt give data when I connected it to the SCL1/SDA1 ports on the
+  //teensy... long story short I could use some help here
 
 //SD logging setup
 File dataFile;
 char filename[] = "DATA000.csv";
-#define sd_dt 1000 //time in ms between data points in csv file logging
+#define sd_dt 200 //time in ms between data points in csv file logging
 
 //Battery Reading Setup
 #define Batt_V_Read 14  %A0
@@ -142,7 +127,7 @@ int voltage_divider_ratio= 6; //use 11 if using a 1k resistor instead of a 2k
 #define PWM2 3
 #define PWM3 4
 #define PWM4 5
-#define PWM5 6          
+#define PWM5 6
 #define PWM6 7          //LL1
 #define PWM7 8          //LL2
 #define PWM8 23 //A9    //LL3
@@ -153,7 +138,6 @@ int voltage_divider_ratio= 6; //use 11 if using a 1k resistor instead of a 2k
 #define PWM13 16 //A2   //S2
 #define PWM14 36 //A17  //S3
 #define PWM15 35 //A16  //S4
-
 
 PWMServo S1;
 PWMServo S2;
@@ -166,14 +150,13 @@ PWMServo LL4;
 PWMServo EDF;
 
 int pos;
-int pos1 = 90;
 
 int S1_Offset= 25;  //might need to change to double
 int S2_Offset= 13;
 int S3_Offset= 0;
 int S4_Offset= 0;
 
-
+//Telem Functions
 #define SEND_VECTOR_ITEM(field, value)\
   SEND_ITEM(field, value.x())         \
   SEND_GROUP_ITEM(value.y())          \
@@ -187,32 +170,26 @@ int S4_Offset= 0;
   WRITE_CSV_ITEM(value.y())           \
   WRITE_CSV_ITEM(value.z())
 
-unsigned int missed_deadlines = 0;
-
-//BMP calibration factor is ABOVE in the code ^
+//Launch Prep
+  //BMP calibration factor is ABOVE in the code ^
 float Launch_ALT= 190;  //Launch Alt above sea level in m- UPDATE B4 FLIGHT!!!
 float ATST= 25; //m above launch height- UPDATE B4 FLIGHT!!!
-//Apogee Trigger Safety Threshold- apogee detection/(parachute) triggering will not work below this pt
-
-//carry working gps to points and record positions- UPDATE B4 FLIGHT!!!
+  //Apogee Trigger Safety Threshold- apogee detection/(parachute) triggering
+  //will not work below this pt
+  //carry working gps to points and record positions- UPDATE B4 FLIGHT!!!
 float launch_lat= 44.975313;
 double launch_lon= -93.232216;
 float land_lat= (44.975313+.00035);
 float land_lon= (-93.232216+.00035);
 
-long gpstimer= 0;
-long radiotimer= 0;
-long readtimer= 0;
-long bmptimer= 0;
-long bnotimer= 0;
-long sdtimer= 0;
-long falltimer=0;
+//Creating Internal Variables
+long gpstimer, radiotimer, readtimer, bmptimer, bnotimer, sdtimer, falltimer =0;
 #define fall_dt 50
-
+//long KALMANtimer= 0;    //KALMAN operations take place w/ acceleration (BNO055)
 
 imu::Vector<3> gyroscope;
 imu::Vector<3> euler;
-imu::Vector<3> accelerometer;
+imu::Vector<3> A;
 imu::Vector<3> magnetometer;
 imu::Quaternion q1; //double qw; // double q[4]; //both might also work, not sure
 double temp;
@@ -225,67 +202,64 @@ double test;
 double heading;
 double attitude;
 double bank;
-
-  double bno_x= 0;
-  double bno_y= 0;
-  double bno_z= 0;
-  double bno_vx= 0;
-  double bno_vy= 0;
-  double bno_vz= 0;
-double bno_alt= Launch_ALT; //will be -bno_x
+double bno_x, bno_y, bno_z, bno_vx, bno_vy, bno_vz= 0;
+double bno_alt= 0;  //Launch_ALT;     //0;
 double bno_alt_last [10]= {0,0,0,0,0,0,0,0,0,0};
 double bno_alt_new [10]= {0,0,0,0,0,0,0,0,0,0};
 double bno_alt_last_avg= 0;
 double bno_alt_new_avg= 0;
 int bno_descending_counter= 0;
 bool bno_descending= 0;
+  //Internal System States for Kalman Filter
+double Px, Py, Pz, Vx, Vy, Vz, PzKp, PzCp = 0;
+double Xs[6][1]= {{Px},           //Array Format
+                  {Py},
+                  {Pz},   //m obove Home/Launch (AGL)
+                  {Vx},
+                  {Vy},
+                  {Vz}};
+Matrix<double> XS(6,1,(double*)Xs);   //Matrix Lib Format, see example 4 help
+//double Alt_AGL= XS._entity[0][0]  (up to [5][0])
+//Matrix<int> C;
+//C= A*B;
+
+
+
+
+
+
+
 
 double bmp_temp;
 double bmp_pressure;
-double bmp_alt= 0;
-//can review alt data to get bmp vel, accel
+  //can review alt data to get bmp vel, accel
 double bmp_alt_last [20]= {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0};
-//double bmp_alt_new [10]= {0,0,0,0,0,0,0,0,0,0};
-double bmp_alt_last_avg= 0;
-double bmp_alt_new_avg= 0;
-int bmp_descending_counter= 0;
+double bmp_alt_last_avg, bmp_alt_new_avg, bmp_alt= 0;
+int bmp_descending_counter, bmp_descending_counter2= 0;
 bool bmp_descending= 0;
-int bmp_descending_counter2= 0;
-bool bmp_descending2= 0;
+//bool bmp_descending2= 0;
 
-//Cardinal= in the North/East/South/West plane, NO up/down component!
 int16_t sats;
 float fix_hdop; //horiz. diminution of precision
-double gps_lat;
-double gps_lon;
-double gps_alt; //alt above SL in m
-double gps_vel; //abs Cardinal speed in m/s
-double gps_dir; //abs Cardinal course in deg, N=0, E=90...
-double xy_from_lanch; //Cardinal distance in m from launch pt
+double gps_lat, gps_lon, gps_alt;
+  //Cardinal= in the N/E/S/W plane, NO up/down component!
+double gps_vel, gps_dir; //abs Cardinal course in deg, N=0, E=90...
+double x_from_lanch, y_from_lanch; //Cardinal dist in m from launch pt
+double x_to_land, y_to_land; //Cardinal dist in m to land pt
+  //Not as important
 double dir_from_launch; //Cardinal dir from launch pt in deg, N=0, E=90...
 double xy_to_land; //Cardinal distance in m to land pt
 double xy_dir_to_land; //Cardinal direction in deg to land pt
-double x_to_land;
-double y_to_land;
-//NorthEastDown Frame
-double gps_n= 0; //m north of launch spot
-double gps_e= 0; //m east of launch spot
-double gps_d= 0; //m down of launch spot (will be -)
-//can review data to get gps vel, accel, use gps_alt for data analysis
+
+  //NorthEastDown Frame
 double gps_alt_last [10]= {0,0,0,0,0,0,0,0,0,0};
 double gps_alt_new [10]= {0,0,0,0,0,0,0,0,0,0};
-double gps_alt_last_avg= 0;
-double gps_alt_new_avg= 0;
+double gps_alt_last_avg, gps_alt_new_avg, sum= 0;
 int gps_descending_counter= 0;
-bool gps_descending= 0;
-
-bool Apogee_Passed=0;
-
-double sum=0;
-
-//time_t getTeensy3Time;
+bool gps_descending, Apogee_Passed=0;
 
 
+//Functions
 time_t getTeensy3Time(){
   return Teensy3Clock.get();
 }
@@ -305,7 +279,7 @@ void start_countdown() {
     if (!ss) {
       TELEMETRY_SERIAL.println(F("Countdown aborted due to sensor failure"));
       SET_STATE(STAND_BY); // Set state to signal countdown was aborted
-    } 
+    }
     else{
       //do nothing
     }
@@ -351,7 +325,7 @@ void abort_autosequence() {   //need to check if data is still logged after an a
       //SET_STATE(STAND_BY)'
       abort_time = millis();
       break;
-      
+
     case FREEFALL:
       //SET_STATE(STAND_BY)
       abort_time = millis();
@@ -361,12 +335,12 @@ void abort_autosequence() {   //need to check if data is still logged after an a
       //SET_STATE(STAND_BY)
       abort_time = millis();
       break;
-      
+
     case MAIN_DESCENT:
       //SET_STATE(STAND_BY)
       abort_time = millis();
       break;
-      
+
     case LANDED:
       SET_STATE(STAND_BY);
       abort_time = millis();
@@ -430,7 +404,7 @@ void setup() {
         TELEMETRY_SERIAL.println(filename);
         dataFile.print(F("abs time,sys date,sys time,heading (psy),attitude (theta),bank (phi),x accel,x gyro,bmp alt,gps alt,bno alt"));
         dataFile.print(F(",sats,hdop,vbatt1,y accel,z accel,y gyro,z gyro"));
-        dataFile.print(F(",gps lat,gps lon,gps vel,gps dir,xy_from_lanch,dir_from_launch"));
+        dataFile.print(F(",gps lat,gps lon,gps vel,gps dir,x_from_lanch,y_from_lanch,dir_from_launch"));
         dataFile.print(F(",xy_to_land,xy_dir_to_land,x_to_land,y_to_land"));
         dataFile.println(F(",bmp pressure,bmp temp,bno temp,qw,qx,qy,qz,test,x euler,y euler,z euler,x mag,y mag,z mag,l2g"));
         break;
@@ -450,7 +424,7 @@ void setup() {
   digitalWrite(PYRO5,LOW);
   //this could probably be done w/ a loop in fewer lines
   //so if someone wants to do that that'll work
-  
+
   S1.attach(PWM1);  //17
   //S1.attach(SERVO_PIN_A, 1000, 2000); //some motors need min/max setting ,ESCs go 1k-2k
   S2.attach(PWM2);  //16
@@ -462,28 +436,43 @@ void setup() {
   LL4.attach(PWM9);  //22
   EDF.attach(PWM11); //21
 
-  
-  for(int q=0; q<10;q++){
-    digitalWrite(LED,LOW); delay(100); digitalWrite(LED,HIGH);delay(100); 
+  for(int q=0; q<5;q++){
+    digitalWrite(LED,LOW); delay(200); digitalWrite(LED,HIGH);delay(200);
   }
-  smartDelay(1000*10);
-  for(int q=0; q<20;q++){
-    digitalWrite(LED,LOW); delay(50); digitalWrite(LED,HIGH);delay(50); 
-  }
+  //Automatically set values for flight
 
-  //Try to automatically set values for flight
-  //Launch_ALT= bmp.readAltitude(SEALEVELPRESSURE_HPA);   //keeps giving 1900m
-  
-  if(gps.satellites.value() > 4){
+  //smartDelay(1000*10);      //Fixed time method
+
+  do{
+    delay(1000);
+    //smartDelay(1000);
+  }while( !(gps.location.isValid()) );
+  //or try gps.satellites.value() < 4
+
+  //use gps.sentencesWithFix() to tell when a new GPS fix arrives (tell when to do Kalman Filtering)
+  //int GPS_Fixes= gps.sentencesWithFix();
+  //if(gps.sentencesWithFix() > GPS_Fixes){
+  // do Kalman Filtering with new GPS data!
+  // GPS_Fixes= gps.sentencesWithFix();
+  //}
+
+  // gps.satellites.value() > 4
+  //if(gps.satellites.value() > 4){     //can use gps.location.isValid() instead
     gps_alt= gps.altitude.meters();
     launch_lat= gps.location.lat();
     launch_lon= gps.location.lng();
     land_lat= launch_lat + 0.0002;
     land_lon= launch_lon + 0.0002;
+  //}
+
+   //Launch_ALT= bmp.readAltitude(SEALEVELPRESSURE_HPA);   //keeps giving 1900m
+   //Might need to comment this out b/c it won't work properly
+  Launch_ALT= bmp.readAltitude(SEALEVELPRESSURE_HPA);
+
+  //Ready Lights
+  for(int q=0; q<20;q++){
+    digitalWrite(LED,LOW); delay(50); digitalWrite(LED,HIGH);delay(50);
   }
-
-
-
 
   //Lower Landing Legs
   for(pos = 0; pos <=180; pos += 18){
@@ -562,7 +551,7 @@ void setup() {
       S4.write(pos);
       delay(80);
   }
-  
+
   //all
   for(pos = 0; pos <=180; pos += 1){
       //analogWrite(17,pos);
@@ -591,12 +580,11 @@ void setup() {
 
 
 void loop() {
-  long time0 = millis();  //I don't think we need this
 
   if(millis()-bnotimer > bno_dt){
     gyroscope     = bno.getVector(Adafruit_BNO055::VECTOR_GYROSCOPE);
     euler         = bno.getVector(Adafruit_BNO055::VECTOR_EULER);
-    accelerometer = bno.getVector(Adafruit_BNO055::VECTOR_ACCELEROMETER);
+    A = bno.getVector(Adafruit_BNO055::VECTOR_ACCELEROMETER);
     magnetometer  = bno.getVector(Adafruit_BNO055::VECTOR_MAGNETOMETER);
     q1 = bno.getQuat(); //qw= quat.w(); or q[4]=[quat.w(),quat.x()...
     temp = bno.getTemp();
@@ -622,6 +610,28 @@ void loop() {
     attitude = RAD_TO_DEG*asin(2*test/unit);
     bank = RAD_TO_DEG*atan2(2*q1.x()*q1.w()-2*q1.y()*q1.z() , -sqx + sqy - sqz + sqw);
 
+
+    //Put KALMAN Filter Code Here
+
+
+      //XS Matrix will continually update...
+        //predict new altitude
+
+
+          //if(new GPS data){
+          //  Kalman update the altitude (XS also changes)
+          //  When factoring in the GPS data, you MUST use x_from_lanch, y_from_lanch
+          //  as values for Measurement (true) Px/Py, and you MUST use
+          //  gps_alt - Launch_ALT as Measurement (true) Pz
+          //}
+
+
+
+
+
+
+    Pz= XS._entity[2][0]; //m AGL
+    bno_alt= Launch_ALT+ XS._entity[2][0];  //m ASL
 
 
     for (int i=0;i<9;i++){
@@ -659,7 +669,30 @@ void loop() {
   if(millis()-bmptimer > bmp_dt){
     bmp_temp= bmp.temperature; //in Celcius, do I need int8_t type????
     bmp_pressure= bmp.pressure / 100.0; //hPa or mbar
-    bmp_alt= bmp.readAltitude(SEALEVELPRESSURE_HPA); //m
+
+    bmp_alt= bmp.readAltitude(SEALEVELPRESSURE_HPA); //m ASL     //estimate part
+    //Because bmp_alt is already ASL, I can directly compare to gps_alt
+
+    //Kalman filter for barometric/bmp alt
+
+
+
+
+
+
+
+
+
+
+
+
+    //Complementary Filter for barometric/bmp alt
+
+
+
+
+
+
 
     //shift everthing one back
     for (int i=0;i<19;i++){
@@ -681,26 +714,28 @@ void loop() {
 
     if((bmp_alt_last_avg > bmp_alt_new_avg) && (bmp_alt > (Launch_ALT + ATST))){
       bmp_descending_counter= bmp_descending_counter + 1;
-      IS_RISING= 0;
-      IS_FALLING= 1;
+      //IS_RISING= 0;
+      //IS_FALLING= 1;
     }
 
+ /*
     if((bmp_alt_last[19] > bmp_alt_last[0]) && (bmp_alt > (Launch_ALT + ATST))){
       bmp_descending_counter2= bmp_descending_counter2 + 1;
     }
 
     if((bmp_alt_last_avg < bmp_alt_new_avg)){
-      IS_RISING= 1;
-      IS_FALLING= 0;
+      //IS_RISING= 1;
+      //IS_FALLING= 0;
     }
-    else if( abs(bmp_alt_last_avg - bmp_alt_new_avg) < .3){  //vertical velocity less than .3 m over the past avg sec
-      IS_RISING= 0;
-      IS_FALLING= 0;  
+    else if( abs(bmp_alt_last_avg - bmp_alt_new_avg) < .4){  //vertical velocity less than .3 m over the past avg sec
+      //IS_RISING= 0;
+      //IS_FALLING= 0;
     }
     else{
-      IS_RISING= 0;
-      IS_FALLING= 1; 
+      //IS_RISING= 0;
+      //IS_FALLING= 1;
     }
+ */
 
     bmptimer= millis();
   }
@@ -711,12 +746,13 @@ void loop() {
     }
   }
 
+ /*
   if(bmp_descending2 != 1){
     if((bmp_descending_counter2 >9) && (bmp_alt > Launch_ALT + ATST)){
       bmp_descending2 = 1;
     }
   }
-
+ */
 
   if(millis()-gpstimer > gps_dt){
     //battery voltage read code will also go here:
@@ -730,15 +766,13 @@ void loop() {
     gps_alt= gps.altitude.meters();
     gps_vel= gps.speed.mps();
     gps_dir= gps.course.deg();
-    xy_from_lanch= TinyGPSPlus::distanceBetween(launch_lat, launch_lon, gps_lat, gps_lon);
+    x_from_lanch= TinyGPSPlus::distanceBetween(0, launch_lon, 0, gps_lon);
+    y_from_lanch= TinyGPSPlus::distanceBetween(launch_lat, 0, gps_lat, 0);
     dir_from_launch= TinyGPSPlus::courseTo(launch_lat, launch_lon, gps_lat, gps_lon);
     xy_to_land= TinyGPSPlus::distanceBetween(gps_lat, gps_lon, land_lat, land_lon);
     xy_dir_to_land= TinyGPSPlus::courseTo(gps_lat, gps_lon, launch_lat, launch_lon);
     x_to_land= TinyGPSPlus::distanceBetween(0, gps_lon, 0, land_lon);
     y_to_land= TinyGPSPlus::distanceBetween(gps_lat, 0, land_lat, 0);
-    gps_n= TinyGPSPlus::distanceBetween(launch_lat, 0, gps_lat, 0);
-    gps_e= TinyGPSPlus::distanceBetween(0, launch_lon, 0, gps_lon);
-    gps_d=-gps_alt;
 
     smartDelay(300);
     /*
@@ -788,7 +822,7 @@ void loop() {
       digitalWrite(PYRO3,HIGH);
       //DROGUE_FIRED= 1;
       P3_setting=1;
-    }    
+    }
     if ( (state==POWERED_ASCENT) && (run_time>BURN_TIME) ){
       SET_STATE(UNPOWERED_ASCENT);
     }
@@ -804,20 +838,20 @@ void loop() {
     if ( (state==MAIN_DESCENT) && (bmp_alt < Launch_ALT + 8) ){
       SET_STATE(LANDED);
     }
-  
+
     //Code that is active before Apogee is Reached/Passed
     if(Apogee_Passed !=1){
 
       //S1.write(pos1);
 
       //The following loop only trigger ONCE (when apogee is detected)
-      if((gps_descending*1)+(bmp_descending*1)+(bmp_descending2*1)+(bno_descending*1) > 1){
+      if((gps_descending*1)+(bmp_descending*1)+(bno_descending*1) > 1){ //+(bmp_descending2*1)
         Apogee_Passed=1;
         //fire drouge chute
         digitalWrite(PYRO1,HIGH);
         DROGUE_FIRED= 1;
         P1_setting=1;
-        
+
         //for(pos = 180; pos >=1; pos -= 1){ //close a servo all the way
         //  S1.write(pos);
         //  delay(30);
@@ -832,7 +866,7 @@ void loop() {
         digitalWrite(PYRO2,HIGH); //fire main chute, just an example
         MAIN_FIRED= 1;
         P2_setting=1;
-        
+
         //would need another trigger lock to ensure this loop doesn't
         //keep repeating on every iteration...
         //for(pos = 0; pos < 180; pos+=1) { //open a servo all the way
@@ -847,6 +881,16 @@ void loop() {
 
     falltimer=millis();
   }
+
+
+
+
+  //KALMAN Functions here
+
+
+
+
+
 
 
 
@@ -948,15 +992,15 @@ void loop() {
     //Send Fomat for Matlab UI (uncomment as needed)
       /*
     sprintf(send1,"@@@@@,%u,%u/%u/%u,%u:%u:%u,%.2f,%.2f,%.5f,%.5f,%.2f,%.2f,%.2f,%u",millis(),year(),month(),day(),hour(),minute(),second(),bmp_alt,gps_alt,gps_lat,gps_lon,vbatt1,test,fix_hdop,sats);
-    sprintf(send2,",%.3f,%.3f,%.3f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f",heading,attitude,bank,euler.x(),euler.y(),euler.z(),magnetometer.x(),magnetometer.y(),magnetometer.z(),gyroscope.x(),gyroscope.y(),gyroscope.z(),accelerometer.x(),accelerometer.y(),accelerometer.z());
-    sprintf(send3,",%.1f,%.1f,%.1f,%.1f,%.1f,%u,%u,%u,%u,%u,%u,%.1f,%.1f,%.1f,%.5f,%.5f,%.5f,%.5f",temp,gps_vel,gps_dir,xy_from_lanch,dir_from_launch,run_time,P1_setting,P2_setting,P3_setting,P4_setting,P5_setting,ATST,Launch_ALT,SEALEVELPRESSURE_HPA,launch_lat,launch_lon,land_lat,land_lon);
-    sprintf(send4,",%u,%u,%u,%u,%s,%u,%u,%u,&&&&&",gps_descending,bmp_descending,bmp_descending2,bno_descending,state,Apogee_Passed,link2ground,ss);
+    sprintf(send2,",%.3f,%.3f,%.3f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f",heading,attitude,bank,euler.x(),euler.y(),euler.z(),magnetometer.x(),magnetometer.y(),magnetometer.z(),gyroscope.x(),gyroscope.y(),gyroscope.z(),A.x(),A.y(),A.z());
+    sprintf(send3,",%.1f,%.1f,%.1f,%.1f,%.1f,%u,%u,%u,%u,%u,%u,%.1f,%.1f,%.1f,%.5f,%.5f,%.5f,%.5f",temp,gps_vel,gps_dir,x_from_lanch,y_from_lanch,dir_from_launch,run_time,P1_setting,P2_setting,P3_setting,P4_setting,P5_setting,ATST,Launch_ALT,SEALEVELPRESSURE_HPA,launch_lat,launch_lon,land_lat,land_lon);
+    sprintf(send4,",%u,%u,%u,%u,%s,%u,%u,%u,&&&&&",gps_descending,bmp_descending,bno_descending,state,Apogee_Passed,link2ground,ss);
     TELEMETRY_SERIAL.print(send1);
     TELEMETRY_SERIAL.print(send2);
     TELEMETRY_SERIAL.print(send3);
     TELEMETRY_SERIAL.println(send4);
       */
-    
+
     //Send Fomat for Python UI (uncomment as needed)
     // /*
     BEGIN_SEND
@@ -964,7 +1008,7 @@ void loop() {
     SEND_VECTOR_ITEM(gyro         , gyroscope)
     SEND_ITEM(temperature         , temp)
     SEND_VECTOR_ITEM(magnetometer , magnetometer)
-    SEND_VECTOR_ITEM(acceleration , accelerometer)
+    SEND_VECTOR_ITEM(acceleration , A)
     SEND_ITEM(bmp_alt             , bmp_alt)
     SEND_ITEM(gps_alt             , gps_alt)
     //SEND_ITEM(gps_lat           , gps_lat)
@@ -983,13 +1027,13 @@ void loop() {
     SEND_ITEM(test                , test)
     SEND_ITEM(gps_vel             , gps_vel)
     SEND_ITEM(gps_dir             , gps_dir)
-    SEND_ITEM(xy_from_lanch       , xy_from_lanch)
+    SEND_ITEM(x_from_lanch        , x_from_lanch)
+    SEND_ITEM(y_from_lanch        , y_from_lanch)
     SEND_ITEM(dir_from_launch     , dir_from_launch)
     SEND_ITEM(sats                , sats)
     SEND_ITEM(hdp                 , fix_hdop)
     SEND_ITEM(vb1                 , vbatt1)
     SEND_ITEM(ss                  , ss)
-    //SEND_ITEM(run_time            , millis()-start_time-COUNTDOWN_DURATION);
     SEND_ITEM(l2g                 , link2ground)
     SEND_ITEM(P1_setting          , P1_setting)
     SEND_ITEM(P2_setting          , P2_setting)
@@ -998,7 +1042,7 @@ void loop() {
     SEND_ITEM(P5_setting          , P5_setting)
     SEND_ITEM(gps_d               , gps_descending)
     SEND_ITEM(bmp_d               , bmp_descending)
-    SEND_ITEM(bmp_d2              , bmp_descending2)
+    //SEND_ITEM(bmp_d2              , bmp_descending2)
     SEND_ITEM(bno_d               , bno_descending)
     SEND_ITEM(Apogee_Passed       , Apogee_Passed)
 
@@ -1012,11 +1056,7 @@ void loop() {
 
     SEND_ITEM(Apogee_Passed       , Apogee_Passed)
     SEND_ITEM(run_time            , run_time)
-    SEND_ITEM(up                  , IS_RISING)
-    SEND_ITEM(down                , IS_FALLING)
-    SEND_ITEM(gps_n               , gps_n)
-    SEND_ITEM(gps_e               , gps_e)
-    
+
     if(state==STAND_BY){
       SEND_ITEM(status, "STAND_BY" )
     }
@@ -1041,10 +1081,10 @@ void loop() {
     if(state==LANDED){
       SEND_ITEM(status, "LANDED" )
     }
-    
+
     //SEND_ITEM(status            , int(state) )
     //SEND_ITEM(status            , char(state) )
-    
+
     END_SEND
     // */
 
@@ -1067,7 +1107,7 @@ void loop() {
     WRITE_CSV_ITEM(heading)
     WRITE_CSV_ITEM(attitude)
     WRITE_CSV_ITEM(bank)
-    WRITE_CSV_ITEM(accelerometer.x())
+    WRITE_CSV_ITEM(A.x())
     WRITE_CSV_ITEM(gyroscope.x())
     WRITE_CSV_ITEM(bmp_alt)
     WRITE_CSV_ITEM(gps_alt)
@@ -1076,18 +1116,19 @@ void loop() {
     WRITE_CSV_ITEM(fix_hdop)
     WRITE_CSV_ITEM(vbatt1)
       //WRITE_CSV_VECTOR_ITEM(gyroscope)
-    WRITE_CSV_ITEM(accelerometer.y())
-    WRITE_CSV_ITEM(accelerometer.z())
+    WRITE_CSV_ITEM(A.y())
+    WRITE_CSV_ITEM(A.z())
     WRITE_CSV_ITEM(gyroscope.y())
     WRITE_CSV_ITEM(gyroscope.z())
-      //WRITE_CSV_VECTOR_ITEM(accelerometer)
+      //WRITE_CSV_VECTOR_ITEM(A)
     //WRITE_CSV_ITEM(gps_lat) //change to have more precision
     dataFile.print(F(", ")); dataFile.print(gps_lat,8);
     //WRITE_CSV_ITEM(gps_lon) //change to have more precision
     dataFile.print(F(", ")); dataFile.print(gps_lon,8);
     WRITE_CSV_ITEM(gps_vel)
     WRITE_CSV_ITEM(gps_dir)
-    WRITE_CSV_ITEM(xy_from_lanch)
+    WRITE_CSV_ITEM(x_from_lanch)
+    WRITE_CSV_ITEM(y_from_lanch)
     WRITE_CSV_ITEM(dir_from_launch)
     WRITE_CSV_ITEM(xy_to_land)
     WRITE_CSV_ITEM(xy_dir_to_land)
