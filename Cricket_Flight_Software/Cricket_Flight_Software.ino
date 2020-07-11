@@ -16,11 +16,11 @@
 
 #define CONFIGURATION FLIGHT    //UPDATE b4 FLIGHT!!!
 
-
 #define HEARTBEAT_TIMEOUT  5000
-long heartbeat_time = 0;
+unsigned long heartbeat_time = 0;
 bool link2ground = 1;
-bool cmd; //for pyro channels
+//bool cmd; //for pyro channels
+int cmd;
 float val; //read value for ground config
 bool P1_setting,P2_setting,P3_setting,P4_setting,P5_setting= 0;
 
@@ -35,7 +35,9 @@ bool P1_setting,P2_setting,P3_setting,P4_setting,P5_setting= 0;
 long abort_time, start_time, run_time= 0;
 bool ss = true; //ss stands for sensor_status
 
-char data[10], data_name[20] = "";
+//char data[10], data_name[20] = "";
+char data;
+char data_name;
 
 typedef enum {
   STAND_BY,
@@ -97,7 +99,7 @@ Adafruit_BMP3XX bmp(BMP_CS, BMP_MOSI, BMP_MISO,  BMP_SCK);  //software SPI
 //BNO setup
 Adafruit_BNO055 bno = Adafruit_BNO055(55, 0x28, &Wire);//ID, Address, Wire
 //use the syntax &Wire1, 2,... for SDA1, 2,... //55 as the only argument also works
-#define bno_dt 50 //time in ms between samples for bno055
+#define bno_dt 50.0 //time in ms between samples for bno055
   //Remaining issues: I haven't been able to get I2C ports on the teensy working
   //other than SDA0 and SCL0... there is some sytax involving "&Wire"
   //above in the BNO setup that I think is supposed to be changed but
@@ -189,7 +191,7 @@ long gpstimer, radiotimer, readtimer, bmptimer, bnotimer, sdtimer, falltimer =0;
 
 imu::Vector<3> gyroscope;
 imu::Vector<3> euler;
-imu::Vector<3> A;
+imu::Vector<3> Acc;
 imu::Vector<3> magnetometer;
 imu::Quaternion q1; //double qw; // double q[4]; //both might also work, not sure
 double temp;
@@ -197,7 +199,7 @@ double sqw;
 double sqx;
 double sqy;
 double sqz;
-double unit;
+double unit_;
 double test;
 double heading;
 double attitude;
@@ -210,18 +212,72 @@ double bno_alt_last_avg= 0;
 double bno_alt_new_avg= 0;
 int bno_descending_counter= 0;
 bool bno_descending= 0;
+
   //Internal System States for Kalman Filter
 double Px, Py, Pz, Vx, Vy, Vz, PzKp, PzCp = 0;
-double Xs[6][1]= {{Px},           //Array Format
+  //State Matrix X
+double Xs[6][1]= {{Px},        //Array Format needed to fill XS
                   {Py},
                   {Pz},   //m obove Home/Launch (AGL)
                   {Vx},
                   {Vy},
                   {Vz}};
 Matrix<double> XS(6,1,(double*)Xs);   //Matrix Lib Format, see example 4 help
-//double Alt_AGL= XS._entity[0][0]  (up to [5][0])
-//Matrix<int> C;
-//C= A*B;
+  //double Alt_AGL= XS._entity[0][0]  (up to [5][0])
+  //Matrix<int> C;
+  //C= A*B;
+
+  //State Covariance Matrix P
+double P_[6][6]= {{1,0,0,0,0,0},   //low b/c GPS will give ACTUAL measurements
+                 {0,1,0,0,0,0},
+                 {0,0,1,0,0,0},
+                 {0,0,0,100,0,0}, //high b/c no direct vel measurements
+                 {0,0,0,0,100,0},
+                 {0,0,0,0,0,100}};
+Matrix<double> P(6,6,(double*)P_);
+
+  //Kinematics Matrix A
+Matrix<double> A(6,6,'I');
+
+  //Kinematics Matrix B
+Matrix<double> B(6,3,0);
+
+  //Measurement Matrix U
+Matrix<double> U(3,1,0);
+
+  //Transition Matrix H (shouldn't change)
+double H_[3][6]= {{1.0,0,0,0,0,0},
+                  {0,1.0,0,0,0,0},
+                  {0,0,1.0,0,0,0}};
+Matrix<double> H(3,6,(double*)H_);
+Matrix<double> H_T= Matrix<double>::transpose(H);
+
+  //Identity Matrix I
+Matrix<double> I(6,6,'I');
+
+  //Measurement Covariance Matrix R
+double R_[3][3]= {{.0225,0,0},    
+                  {0,.0225,0},
+                  {0,0,.0225}};
+  //increasing the measurement covariances reduces the Kalman gain K
+  //...This filters more noise but slows down the filter speed
+Matrix<double> R(3,3,(double*)R_);
+
+  //Process Noise Covariance Matrix Q
+double noise_ax= 5;
+double noise_ay= 5;
+double noise_az= 5;
+Matrix<double> Q(6,6,0);
+
+  //Difference Matrix Y
+Matrix<double> Y_diff(3,1,0);
+
+  //Kalman Gain Matrix K
+Matrix<double> K(6,3,0);
+Matrix<double> K_denom(3,3,0);
+
+  //GPS Measurement Matrix Z
+Matrix<double> Z_Meas(3,1,0);
 
 
 
@@ -230,6 +286,13 @@ Matrix<double> XS(6,1,(double*)Xs);   //Matrix Lib Format, see example 4 help
 
 
 
+
+double dt= bno_dt/1000.0;   //.05
+double Kdt, dt2, dt3, dt4;
+double Kt0, Kt= 0; 
+long GPS_Fixes, GPS_Fixes_prev= 0;
+
+//other variables
 double bmp_temp;
 double bmp_pressure;
   //can review alt data to get bmp vel, accel
@@ -244,14 +307,13 @@ float fix_hdop; //horiz. diminution of precision
 double gps_lat, gps_lon, gps_alt;
   //Cardinal= in the N/E/S/W plane, NO up/down component!
 double gps_vel, gps_dir; //abs Cardinal course in deg, N=0, E=90...
-double x_from_lanch, y_from_lanch; //Cardinal dist in m from launch pt
+double x_from_launch, y_from_launch; //Cardinal dist in m from launch pt
 double x_to_land, y_to_land; //Cardinal dist in m to land pt
   //Not as important
 double dir_from_launch; //Cardinal dir from launch pt in deg, N=0, E=90...
 double xy_to_land; //Cardinal distance in m to land pt
 double xy_dir_to_land; //Cardinal direction in deg to land pt
 
-  //NorthEastDown Frame
 double gps_alt_last [10]= {0,0,0,0,0,0,0,0,0,0};
 double gps_alt_new [10]= {0,0,0,0,0,0,0,0,0,0};
 double gps_alt_last_avg, gps_alt_new_avg, sum= 0;
@@ -404,7 +466,7 @@ void setup() {
         TELEMETRY_SERIAL.println(filename);
         dataFile.print(F("abs time,sys date,sys time,heading (psy),attitude (theta),bank (phi),x accel,x gyro,bmp alt,gps alt,bno alt"));
         dataFile.print(F(",sats,hdop,vbatt1,y accel,z accel,y gyro,z gyro"));
-        dataFile.print(F(",gps lat,gps lon,gps vel,gps dir,x_from_lanch,y_from_lanch,dir_from_launch"));
+        dataFile.print(F(",gps lat,gps lon,gps vel,gps dir,x_from_launch,y_from_launch,dir_from_launch"));
         dataFile.print(F(",xy_to_land,xy_dir_to_land,x_to_land,y_to_land"));
         dataFile.println(F(",bmp pressure,bmp temp,bno temp,qw,qx,qy,qz,test,x euler,y euler,z euler,x mag,y mag,z mag,l2g"));
         break;
@@ -446,24 +508,14 @@ void setup() {
   do{
     delay(1000);
     //smartDelay(1000);
-  }while( !(gps.location.isValid()) );
-  //or try gps.satellites.value() < 4
+    //could also report hdop and sat number for debugging
+  }while( (!(gps.location.isValid())) || (gps.hdop.hdop() > 4.0) || (gps.satellites.value() < 5) );
 
-  //use gps.sentencesWithFix() to tell when a new GPS fix arrives (tell when to do Kalman Filtering)
-  //int GPS_Fixes= gps.sentencesWithFix();
-  //if(gps.sentencesWithFix() > GPS_Fixes){
-  // do Kalman Filtering with new GPS data!
-  // GPS_Fixes= gps.sentencesWithFix();
-  //}
-
-  // gps.satellites.value() > 4
-  //if(gps.satellites.value() > 4){     //can use gps.location.isValid() instead
     gps_alt= gps.altitude.meters();
     launch_lat= gps.location.lat();
     launch_lon= gps.location.lng();
     land_lat= launch_lat + 0.0002;
     land_lon= launch_lon + 0.0002;
-  //}
 
    //Launch_ALT= bmp.readAltitude(SEALEVELPRESSURE_HPA);   //keeps giving 1900m
    //Might need to comment this out b/c it won't work properly
@@ -584,7 +636,7 @@ void loop() {
   if(millis()-bnotimer > bno_dt){
     gyroscope     = bno.getVector(Adafruit_BNO055::VECTOR_GYROSCOPE);
     euler         = bno.getVector(Adafruit_BNO055::VECTOR_EULER);
-    A = bno.getVector(Adafruit_BNO055::VECTOR_ACCELEROMETER);
+    Acc = bno.getVector(Adafruit_BNO055::VECTOR_ACCELEROMETER);
     magnetometer  = bno.getVector(Adafruit_BNO055::VECTOR_MAGNETOMETER);
     q1 = bno.getQuat(); //qw= quat.w(); or q[4]=[quat.w(),quat.x()...
     temp = bno.getTemp();
@@ -593,47 +645,111 @@ void loop() {
     sqx = q1.x()*q1.x();
     sqy = q1.y()*q1.y();
     sqz = q1.z()*q1.z();
-    unit = sqx + sqy + sqz + sqw; // if normalised is one, otherwise is correction factor
+    unit_ = sqx + sqy + sqz + sqw; // if normalised is one, otherwise is correction factor
     test = q1.x()*q1.y() + q1.z()*q1.w();
     //when test is close to +/- .5, the imu is close to an euler singularity
-    if (test > 0.499*unit) { // singularity at north pole, >86.3 deg
+    if (test > 0.499*unit_) { // singularity at north pole, >86.3 deg
       heading = 2 * atan2(q1.x(),q1.w());
       attitude = PI/2;
       bank = 0;
     }
-    if (test < -0.499*unit) { // singularity at south pole, <-86.3 deg
+    if (test < -0.499*unit_) { // singularity at south pole, <-86.3 deg
       heading = -2 * atan2(q1.x(),q1.w());
       attitude = -PI/2;
       bank = 0;
     }
     heading = RAD_TO_DEG*atan2(2*q1.y()*q1.w()-2*q1.x()*q1.z() , sqx - sqy - sqz + sqw);
-    attitude = RAD_TO_DEG*asin(2*test/unit);
+    attitude = RAD_TO_DEG*asin(2*test/unit_);
     bank = RAD_TO_DEG*atan2(2*q1.x()*q1.w()-2*q1.y()*q1.z() , -sqx + sqy - sqz + sqw);
 
 
-    //Put KALMAN Filter Code Here
+    //***KALMAN Filter Code***********
+      //also do Accel/GPS/BMP KF here (once GPS gets new data, that's the bottleneck)
+    Kt= millis()/1000.0;    //time in s
+    Kdt= Kt- Kt0; //dt for Kalman Filter, in s
+      //technically I should be able to use (bno_dt/1000= .05) for Kdt
+    if(Kdt > 10.0){    //can increase to 100 if necessary- see log
+      Kdt= 10.0;
+    }
+    Kt0= Kt;
 
+    dt2= Kdt*Kdt;
+    dt3= dt2*Kdt;
+    dt4= dt3*Kdt;
+    
+    //Update time step dependent matricies & Accel readings
+      //log Kdt*1000 *as a treat* (compare to .05*1000 ms)
+    A._entity[0][3]= Kdt;    //or dt (.05 seconds)
+    A._entity[1][4]= Kdt;
+    A._entity[2][5]= Kdt;
 
-      //XS Matrix will continually update...
-        //predict new altitude
+    B._entity[0][0]= .5*dt2;    //or dt (.05 seconds)
+    B._entity[1][1]= .5*dt2;
+    B._entity[2][2]= .5*dt2;
+    B._entity[3][0]= Kdt;
+    B._entity[4][1]= Kdt;
+    B._entity[5][2]= Kdt;
+     
+    Q._entity[0][0] = dt4/4.0*noise_ax;
+    Q._entity[0][3] = dt3/2.0*noise_ax;
+    Q._entity[1][1] = dt4/4.0*noise_ay;
+    Q._entity[1][4] = dt3/2.0*noise_ay;
+    Q._entity[2][2] = dt4/4.0*noise_az;
+    Q._entity[2][5] = dt3/2.0*noise_az;
+    Q._entity[3][0] = dt3/2.0*noise_ax;
+    Q._entity[3][3] = dt2*noise_ax;
+    Q._entity[4][1] = dt3/2.0*noise_ay;
+    Q._entity[4][4] = dt2*noise_ay;
+    Q._entity[5][2] = dt3/2.0*noise_az;
+    Q._entity[5][5] = dt2*noise_az;    
 
+      //Note the ordering & frame change
+      //Acc.x() is the sensor x direction (facing up)
+      //might need to still change things around
+    U._entity[0][0]= Acc.y(); //earth fixed x Accel
+    U._entity[1][0]= Acc.z(); //earth fixed y Accel
+    U._entity[2][0]= (Acc.x()*cos(DEG_TO_RAD*0)*cos(DEG_TO_RAD*0)) -9.81; //earth fixed z Accel
+    
+    //predict new altitude (XS continually updates)
+    XS= (A*XS)+(B*U);
+    P= ((A*P)*Matrix<double>::transpose(A))+Q;
+    
+    
+  
+    //Update States w/ Kalman Filter
+    GPS_Fixes= gps.sentencesWithFix();
+    if(gps.location.isValid() && (GPS_Fixes > GPS_Fixes_prev) ){
+      gps_lon= gps.location.lng();
+      gps_lat= gps.location.lat();
+      x_from_launch= TinyGPSPlus::distanceBetween(0, launch_lon, 0, gps_lon);
+      y_from_launch= TinyGPSPlus::distanceBetween(launch_lat, 0, gps_lat, 0);
+      gps_alt= gps.altitude.meters() - Launch_ALT;
+      Z_Meas._entity[0][0]= x_from_launch;
+      Z_Meas._entity[1][0]= y_from_launch;
+      Z_Meas._entity[2][0]= gps_alt;
+      Y_diff= Z_Meas- H*XS;
 
-          //if(new GPS data){
-          //  Kalman update the altitude (XS also changes)
-          //  When factoring in the GPS data, you MUST use x_from_lanch, y_from_lanch
-          //  as values for Measurement (true) Px/Py, and you MUST use
-          //  gps_alt - Launch_ALT as Measurement (true) Pz
-          //}
+      K_denom= ( ((H*P)*H_T) + R );
+      K= (P*H_T)*Matrix<double>::inv(K_denom);
 
+      //Calculate the new filtered states (only position updates)
+      XS= XS+ (K*Y_diff);
+      
+      //Calculate the new P matrix
+      P= (I-(K*H))*P;
 
-
-
-
-
+      GPS_Fixes_prev= GPS_Fixes;
+    }
+    
+    Px= XS._entity[0][0];
+    Py= XS._entity[1][0];
     Pz= XS._entity[2][0]; //m AGL
-    bno_alt= Launch_ALT+ XS._entity[2][0];  //m ASL
+    bno_alt= Launch_ALT + Pz;  //m ASL
 
 
+
+
+      //Apogee Detection
     for (int i=0;i<9;i++){
       bno_alt_new[i+1]=bno_alt_new[i]; //move every element 1 back
     }
@@ -766,8 +882,8 @@ void loop() {
     gps_alt= gps.altitude.meters();
     gps_vel= gps.speed.mps();
     gps_dir= gps.course.deg();
-    x_from_lanch= TinyGPSPlus::distanceBetween(0, launch_lon, 0, gps_lon);
-    y_from_lanch= TinyGPSPlus::distanceBetween(launch_lat, 0, gps_lat, 0);
+    x_from_launch= TinyGPSPlus::distanceBetween(0, launch_lon, 0, gps_lon);
+    y_from_launch= TinyGPSPlus::distanceBetween(launch_lat, 0, gps_lat, 0);
     dir_from_launch= TinyGPSPlus::courseTo(launch_lat, launch_lon, gps_lat, gps_lon);
     xy_to_land= TinyGPSPlus::distanceBetween(gps_lat, gps_lon, land_lat, land_lon);
     xy_dir_to_land= TinyGPSPlus::courseTo(gps_lat, gps_lon, launch_lat, launch_lon);
@@ -992,8 +1108,8 @@ void loop() {
     //Send Fomat for Matlab UI (uncomment as needed)
       /*
     sprintf(send1,"@@@@@,%u,%u/%u/%u,%u:%u:%u,%.2f,%.2f,%.5f,%.5f,%.2f,%.2f,%.2f,%u",millis(),year(),month(),day(),hour(),minute(),second(),bmp_alt,gps_alt,gps_lat,gps_lon,vbatt1,test,fix_hdop,sats);
-    sprintf(send2,",%.3f,%.3f,%.3f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f",heading,attitude,bank,euler.x(),euler.y(),euler.z(),magnetometer.x(),magnetometer.y(),magnetometer.z(),gyroscope.x(),gyroscope.y(),gyroscope.z(),A.x(),A.y(),A.z());
-    sprintf(send3,",%.1f,%.1f,%.1f,%.1f,%.1f,%u,%u,%u,%u,%u,%u,%.1f,%.1f,%.1f,%.5f,%.5f,%.5f,%.5f",temp,gps_vel,gps_dir,x_from_lanch,y_from_lanch,dir_from_launch,run_time,P1_setting,P2_setting,P3_setting,P4_setting,P5_setting,ATST,Launch_ALT,SEALEVELPRESSURE_HPA,launch_lat,launch_lon,land_lat,land_lon);
+    sprintf(send2,",%.3f,%.3f,%.3f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f",heading,attitude,bank,euler.x(),euler.y(),euler.z(),magnetometer.x(),magnetometer.y(),magnetometer.z(),gyroscope.x(),gyroscope.y(),gyroscope.z(),Acc.x(),Acc.y(),Acc.z());
+    sprintf(send3,",%.1f,%.1f,%.1f,%.1f,%.1f,%u,%u,%u,%u,%u,%u,%.1f,%.1f,%.1f,%.5f,%.5f,%.5f,%.5f",temp,gps_vel,gps_dir,x_from_launch,y_from_launch,dir_from_launch,run_time,P1_setting,P2_setting,P3_setting,P4_setting,P5_setting,ATST,Launch_ALT,SEALEVELPRESSURE_HPA,launch_lat,launch_lon,land_lat,land_lon);
     sprintf(send4,",%u,%u,%u,%u,%s,%u,%u,%u,&&&&&",gps_descending,bmp_descending,bno_descending,state,Apogee_Passed,link2ground,ss);
     TELEMETRY_SERIAL.print(send1);
     TELEMETRY_SERIAL.print(send2);
@@ -1008,7 +1124,7 @@ void loop() {
     SEND_VECTOR_ITEM(gyro         , gyroscope)
     SEND_ITEM(temperature         , temp)
     SEND_VECTOR_ITEM(magnetometer , magnetometer)
-    SEND_VECTOR_ITEM(acceleration , A)
+    SEND_VECTOR_ITEM(acceleration , Acc)
     SEND_ITEM(bmp_alt             , bmp_alt)
     SEND_ITEM(gps_alt             , gps_alt)
     //SEND_ITEM(gps_lat           , gps_lat)
@@ -1027,8 +1143,8 @@ void loop() {
     SEND_ITEM(test                , test)
     SEND_ITEM(gps_vel             , gps_vel)
     SEND_ITEM(gps_dir             , gps_dir)
-    SEND_ITEM(x_from_lanch        , x_from_lanch)
-    SEND_ITEM(y_from_lanch        , y_from_lanch)
+    SEND_ITEM(x_from_launch        , x_from_launch)
+    SEND_ITEM(y_from_launch        , y_from_launch)
     SEND_ITEM(dir_from_launch     , dir_from_launch)
     SEND_ITEM(sats                , sats)
     SEND_ITEM(hdp                 , fix_hdop)
@@ -1107,7 +1223,7 @@ void loop() {
     WRITE_CSV_ITEM(heading)
     WRITE_CSV_ITEM(attitude)
     WRITE_CSV_ITEM(bank)
-    WRITE_CSV_ITEM(A.x())
+    WRITE_CSV_ITEM(Acc.x())
     WRITE_CSV_ITEM(gyroscope.x())
     WRITE_CSV_ITEM(bmp_alt)
     WRITE_CSV_ITEM(gps_alt)
@@ -1116,19 +1232,19 @@ void loop() {
     WRITE_CSV_ITEM(fix_hdop)
     WRITE_CSV_ITEM(vbatt1)
       //WRITE_CSV_VECTOR_ITEM(gyroscope)
-    WRITE_CSV_ITEM(A.y())
-    WRITE_CSV_ITEM(A.z())
+    WRITE_CSV_ITEM(Acc.y())
+    WRITE_CSV_ITEM(Acc.z())
     WRITE_CSV_ITEM(gyroscope.y())
     WRITE_CSV_ITEM(gyroscope.z())
-      //WRITE_CSV_VECTOR_ITEM(A)
+      //WRITE_CSV_VECTOR_ITEM(Acc)
     //WRITE_CSV_ITEM(gps_lat) //change to have more precision
     dataFile.print(F(", ")); dataFile.print(gps_lat,8);
     //WRITE_CSV_ITEM(gps_lon) //change to have more precision
     dataFile.print(F(", ")); dataFile.print(gps_lon,8);
     WRITE_CSV_ITEM(gps_vel)
     WRITE_CSV_ITEM(gps_dir)
-    WRITE_CSV_ITEM(x_from_lanch)
-    WRITE_CSV_ITEM(y_from_lanch)
+    WRITE_CSV_ITEM(x_from_launch)
+    WRITE_CSV_ITEM(y_from_launch)
     WRITE_CSV_ITEM(dir_from_launch)
     WRITE_CSV_ITEM(xy_to_land)
     WRITE_CSV_ITEM(xy_dir_to_land)
