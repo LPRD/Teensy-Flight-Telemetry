@@ -66,7 +66,9 @@ int BURN_TIME= 3000; //ms //Update b4 Flight!
 
  // /*
 void SET_STATE(state_t STATE){
+  TELEMETRY_SERIAL.println(F("Hello????"));
   state= STATE;
+  TELEMETRY_SERIAL.println(F("Hello???"));
 }
 // */
 
@@ -353,6 +355,7 @@ void start_countdown() {
   else {
     TELEMETRY_SERIAL.println(F("Countdown started"));
     SET_STATE(TERMINAL_COUNT);
+    //TELEMETRY_SERIAL.println(F("Hello?"));
     start_time = millis();
     abort_time= 0;
     heartbeat();
@@ -361,6 +364,7 @@ void start_countdown() {
 
 void heartbeat() {
   heartbeat_time = millis();
+  //TELEMETRY_SERIAL.println(F("Hello??"));
 }
 
 void write_state(const char *state_name) {
@@ -506,9 +510,19 @@ void setup() {
   //smartDelay(1000*10);      //Fixed time method
 
   do{
-    delay(1000);
-    //smartDelay(1000);
-    //could also report hdop and sat number for debugging
+    //delay(1000);
+    smartDelay(1000);
+    digitalWrite(LED,LOW); delay(500); digitalWrite(LED,HIGH);delay(250);
+    reading= analogRead(Batt_V_Read);
+    vbatt1= reading*(3.3/1023.00)* voltage_divider_ratio;
+    sats= gps.satellites.value();
+    fix_hdop= gps.hdop.hdop();
+    SEND_ITEM(sats                , sats)
+    SEND_ITEM(hdp                 , fix_hdop)
+    SEND_ITEM(vb1                 , vbatt1)
+    SEND_ITEM(gps_fix             , gps.location.isValid() )
+    TELEMETRY_SERIAL.print(F("\n"));
+    
   }while( (!(gps.location.isValid())) || (gps.hdop.hdop() > 4.0) || (gps.satellites.value() < 5) );
 
     gps_alt= gps.altitude.meters();
@@ -516,10 +530,6 @@ void setup() {
     launch_lon= gps.location.lng();
     land_lat= launch_lat + 0.0002;
     land_lon= launch_lon + 0.0002;
-
-   //Launch_ALT= bmp.readAltitude(SEALEVELPRESSURE_HPA);   //keeps giving 1900m
-   //Might need to comment this out b/c it won't work properly
-  Launch_ALT= bmp.readAltitude(SEALEVELPRESSURE_HPA);
 
   //Ready Lights
   for(int q=0; q<20;q++){
@@ -1017,8 +1027,9 @@ void loop() {
     BEGIN_READ
     READ_FLAG(c) {
       heartbeat();
+      
     }
-    READ_FLAG(reset) {
+    READ_FLAG(r) {
       TELEMETRY_SERIAL.println(F("Resetting board"));
       reset();
     }
@@ -1088,7 +1099,7 @@ void loop() {
 
   // Downlink
   if(millis()-radiotimer > radio_dt){
-    if (millis() > heartbeat_time + HEARTBEAT_TIMEOUT) {
+    if (millis() > (heartbeat_time + HEARTBEAT_TIMEOUT) ) {
       //TELEMETRY_SERIAL.println(F("Loss of data link"));
       link2ground=0;
       //abort_autosequence();
@@ -1156,10 +1167,10 @@ void loop() {
     SEND_ITEM(P3_setting          , P3_setting)
     SEND_ITEM(P4_setting          , P4_setting)
     SEND_ITEM(P5_setting          , P5_setting)
-    SEND_ITEM(gps_d               , gps_descending)
-    SEND_ITEM(bmp_d               , bmp_descending)
+    //SEND_ITEM(gps_d               , gps_descending)
+    //SEND_ITEM(bmp_d               , bmp_descending)
     //SEND_ITEM(bmp_d2              , bmp_descending2)
-    SEND_ITEM(bno_d               , bno_descending)
+    //SEND_ITEM(bno_d               , bno_descending)
     SEND_ITEM(Apogee_Passed       , Apogee_Passed)
 
     SEND_ITEM(ATST                , ATST)
@@ -1167,8 +1178,8 @@ void loop() {
     SEND_ITEM(BMPcf               , SEALEVELPRESSURE_HPA)
     SEND_ITEM(launch_lat          , launch_lat)
     SEND_ITEM(launch_lon          , launch_lon)
-    SEND_ITEM(land_lat            , land_lat)
-    SEND_ITEM(land_lon            , land_lon)
+    //SEND_ITEM(land_lat            , land_lat)
+    //SEND_ITEM(land_lon            , land_lon)
 
     SEND_ITEM(Apogee_Passed       , Apogee_Passed)
     SEND_ITEM(run_time            , run_time)
@@ -1177,6 +1188,7 @@ void loop() {
       SEND_ITEM(status, "STAND_BY" )
     }
     if(state==TERMINAL_COUNT){
+      //TELEMETRY_SERIAL.print(F("QQQ?"));
       SEND_ITEM(status, "TERMINAL_COUNT" )
     }
     if(state==POWERED_ASCENT){
