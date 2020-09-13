@@ -54,7 +54,7 @@ state_t state = STAND_BY;
 
 //bool IS_RISING, IS_FALLING= 0;    //May not need
 bool DROGUE_FIRED, MAIN_FIRED =0;
-int BURN_TIME= 3000; //ms //Update b4 Flight!
+int BURN_TIME= 1600; //ms //Update b4 Flight! J425=1.6s burn time
 
  /*
 // Convenience
@@ -77,7 +77,7 @@ void (*reset)(void) = 0;
 //GPS setup
 static const uint32_t GPSBaud = 9600;
 TinyGPSPlus gps;
-#define gps_dt 100 //time in ms between samples for neo m8n GPS
+#define gps_dt 200 //time in ms between samples for neo m8n GPS
 
 //radio setup
 #define TELEMETRY_SERIAL Serial1 //Teensy 3.6 has to use Serial1 or higher
@@ -101,6 +101,7 @@ Adafruit_BMP3XX bmp(BMP_CS, BMP_MOSI, BMP_MISO,  BMP_SCK);  //software SPI
 //BNO setup
 Adafruit_BNO055 bno = Adafruit_BNO055(55, 0x28, &Wire);//ID, Address, Wire
 //use the syntax &Wire1, 2,... for SDA1, 2,... //55 as the only argument also works
+#define ori_dt 10   //time in ms between orientation updating
 #define bno_dt 50.0 //time in ms between samples for bno055
   //Remaining issues: I haven't been able to get I2C ports on the teensy working
   //other than SDA0 and SCL0... there is some sytax involving "&Wire"
@@ -118,7 +119,7 @@ char filename[] = "DATA000.csv";
 #define Batt_V_Read 14  %A0
 double reading;
 double vbatt1;
-int voltage_divider_ratio= 6; //use 11 if using a 1k resistor instead of a 2k
+int voltage_divider_ratio= 11; //(default 6) use 11 if using a 1k resistor instead of a 2k 
 
 //Pin setup
 #define LED 13 //Error LED, refers to builtin LED on teensy
@@ -176,8 +177,8 @@ int S4_Offset= 0;
 
 //Launch Prep
   //BMP calibration factor is ABOVE in the code ^
-float Launch_ALT= 190;  //Launch Alt above sea level in m- UPDATE B4 FLIGHT!!!
-float ATST= 25; //m above launch height- UPDATE B4 FLIGHT!!!
+float Launch_ALT= 274;  //Launch Alt above sea level in m- UPDATE B4 FLIGHT!!!
+float ATST= 50; //m above launch height- UPDATE B4 FLIGHT!!!
   //Apogee Trigger Safety Threshold- apogee detection/(parachute) triggering
   //will not work below this pt
   //carry working gps to points and record positions- UPDATE B4 FLIGHT!!!
@@ -187,15 +188,22 @@ float land_lat= (44.975313+.00035);
 float land_lon= (-93.232216+.00035);
 
 //Creating Internal Variables
-long gpstimer, radiotimer, readtimer, bmptimer, bnotimer, sdtimer, falltimer =0;
+long gpstimer, radiotimer, readtimer, bmptimer, bnotimer, sdtimer, falltimer, oritimer =0;
+float dtGyro= 0;
+uint64_t thisLoopMicros, lastGyroUpdate =0;
 #define fall_dt 50
 //long KALMANtimer= 0;    //KALMAN operations take place w/ acceleration (BNO055)
 
+//Vector<3> ori;
+imu::Vector<3> ori;
+imu::Vector<3> oriGyro;
 imu::Vector<3> gyroscope;
 imu::Vector<3> euler;
 imu::Vector<3> Acc;
 imu::Vector<3> magnetometer;
-imu::Quaternion q1; //double qw; // double q[4]; //both might also work, not sure
+imu::Quaternion q1; //double qw; // double q[4]; //these won't work the same
+imu::Quaternion oriQuat;  //orientation storing quaternion
+imu::Quaternion rotQuat;  //new rotation quaternion based on gyro rates * dt for each iteration
 double temp;
 double sqw;
 double sqx;
@@ -203,9 +211,12 @@ double sqy;
 double sqz;
 double unit_;
 double test;
-double heading;
-double attitude;
-double bank;
+//double heading;
+//double attitude;
+//double bank;
+double roll, pitch, yaw, oX, oY, oZ = 0;
+double cy, sy, cp, sp, cr, sr;
+double dyaw, dpitch, droll;
 double bno_x, bno_y, bno_z, bno_vx, bno_vy, bno_vz= 0;
 double bno_alt= 0;  //Launch_ALT;     //0;
 double bno_alt_last [10]= {0,0,0,0,0,0,0,0,0,0};
@@ -449,7 +460,8 @@ void setup() {
     ss=0;
   }
   //set BNO mode
-  bno.setMode(Adafruit_BNO055::OPERATION_MODE_NDOF);  //OPERATION_MODE_NDOF_FMC_OFF, see .cpp for all modes
+  bno.setMode(Adafruit_BNO055::OPERATION_MODE_NDOF);  //OPERATION_MODE_NDOF_FMC_OFF, see .cpp for all modes "AMG" is the non-fusion mode with all sensors
+  //bno.setMode(Adafruit_BNO055::OPERATION_MODE_AMG);
   bno.setAxisRemap(Adafruit_BNO055::REMAP_CONFIG_P1); //REMAP_CONFIG_P0 to P7 (1 default)
   //bno.setAxisSign(Adafruit_BNO055::REMAP_SIGN_P7);  //REMAP_SIGN_P0 to P7 (1 default)
   bno.setExtCrystalUse(true);
@@ -468,11 +480,11 @@ void setup() {
         dataFile = SD.open(filename, FILE_WRITE);
         TELEMETRY_SERIAL.print(F("\twriting "));
         TELEMETRY_SERIAL.println(filename);
-        dataFile.print(F("abs time,sys date,sys time,heading (psy),attitude (theta),bank (phi),x accel,x gyro,bmp alt,gps alt,bno alt"));
-        dataFile.print(F(",sats,hdop,vbatt1,y accel,z accel,y gyro,z gyro"));
+        dataFile.print(F("abs time,sys date,sys time,yaw (psy),pitch (theta),roll (phi),Px,Py,Pz,oX,oY,oZ,bmp alt,gps alt,bno alt"));
+        dataFile.print(F(",sats,hdop,vbatt1,x accel,y accel,z accel,x gyro,y gyro,z gyro"));
         dataFile.print(F(",gps lat,gps lon,gps vel,gps dir,x_from_launch,y_from_launch,dir_from_launch"));
         dataFile.print(F(",xy_to_land,xy_dir_to_land,x_to_land,y_to_land"));
-        dataFile.println(F(",bmp pressure,bmp temp,bno temp,qw,qx,qy,qz,test,x euler,y euler,z euler,x mag,y mag,z mag,l2g"));
+        dataFile.println(F(",bmp pressure,bmp temp,bno temp,qw,qx,qy,qz,test,x euler,y euler,z euler,x mag,y mag,z mag,l2g,System State,Apogee Passed,dtGyro"));
         break;
       }
     }
@@ -633,6 +645,11 @@ void setup() {
       delay(50);
   }
 
+
+  //things to run before starting the main loop:
+  
+  q1 = bno.getQuat();   //I don't think this needs to be run here, oriQuat can still equal q1 even if q1 doesn't have values yet, right?
+  lastGyroUpdate= micros();
 }
 
 
@@ -642,15 +659,66 @@ void setup() {
 
 
 void loop() {
+  
+  if(millis()-oritimer > ori_dt){
+    thisLoopMicros= micros();
+    dtGyro = (float)(thisLoopMicros - lastGyroUpdate) / 1000000;
+    lastGyroUpdate = thisLoopMicros;
+    
+    //get gyro data all the time for logging:
+    gyroscope     = bno.getVector(Adafruit_BNO055::VECTOR_GYROSCOPE);     //100hz (?), dps automatically set w/ ndof fusion mode
+    //it might be a good idea to set the BNO to a non-fusion mode after launch so that the dps can be set to 250 vs 2000 for more accurate gyro orientation
+    //on the other hand, it's probably best to keep the fusion on and just use a BMI088 to get super accurate vibration resistant gyro readings anyways. In addition, the fusion data
+    //from the BNO can be compared to BMI088 after various flights
 
+    if(state==STAND_BY || state==TERMINAL_COUNT){
+      //oX/oY/oZ each respectively represent orientation about the x/y/z body axis
+      oX= roll;
+      oY= pitch;
+      oZ= yaw;
+      //use sensor fusion quat for current orientation
+      oriQuat= q1;
+    }
+    else{
+      //convert gyro rates to euler rates to a quaternion
+      dyaw +=   ( gyroscope.x() )*dtGyro;   //.z *should* be the rads/s rate about the z axis of the BMI055, so yaw rate
+      dpitch += ( gyroscope.y() )*dtGyro;   //.y *should* be the rads/s rate about the y axis of the BMI055, so pitch rate
+      droll +=  ( gyroscope.z() )*dtGyro;   //.x *should* be the rads/s rate about the z axis of the BMI055, so roll rate
+
+      cy = cos(dyaw * 0.5);
+      sy = sin(dyaw * 0.5);
+      cp = cos(dpitch * 0.5);
+      sp = sin(dpitch * 0.5);
+      cr = cos(droll * 0.5);
+      sr = sin(droll * 0.5);
+      
+      rotQuat.w()= cr * cp * cy + sr * sp * sy;
+      rotQuat.x()= sr * cp * cy - cr * sp * sy;
+      rotQuat.y()= cr * sp * cy + sr * cp * sy;
+      rotQuat.z()= cr * cp * sy - sr * sp * cy;
+      
+      oriQuat= oriQuat*rotQuat;   //update the orientation storing quaternion
+      oriGyro= oriQuat.toEuler(); //convert the ori storing quat to euler angles (no gimbal lock issues!)
+      oX= RAD_TO_DEG*oriGyro.z();   //oX is roll, .z() represents the 3rd euler rotation which is roll
+      oY= RAD_TO_DEG*oriGyro.y();   //oY is pitch, .y() represents the 2nd euler rotation which is pitch
+      oZ= RAD_TO_DEG*oriGyro.x();   //oZ is yaw, .x() represents the 1rd euler rotation which is yaw
+    }
+
+    //Run the GPS encode function (not directly related to orientation, but want to run this frequently as well)
+    smartDelay(5);  //will make a separate GPS encode timer that smart delays for ~1ms and runs every ~3+ ms (?)
+    
+    oritimer= millis();
+  }
+  
   if(millis()-bnotimer > bno_dt){
-    gyroscope     = bno.getVector(Adafruit_BNO055::VECTOR_GYROSCOPE);
-    euler         = bno.getVector(Adafruit_BNO055::VECTOR_EULER);
+    //gyroscope     = bno.getVector(Adafruit_BNO055::VECTOR_GYROSCOPE); 
+    euler         = bno.getVector(Adafruit_BNO055::VECTOR_EULER);         //sensor fusion
     Acc = bno.getVector(Adafruit_BNO055::VECTOR_ACCELEROMETER);
     magnetometer  = bno.getVector(Adafruit_BNO055::VECTOR_MAGNETOMETER);
-    q1 = bno.getQuat(); //qw= quat.w(); or q[4]=[quat.w(),quat.x()...
+    q1 = bno.getQuat(); //qw= quat.w(); or q[4]=[quat.w(),quat.x()...     //sensor fusion
     temp = bno.getTemp();
 
+/*
     sqw = q1.w()*q1.w();
     sqx = q1.x()*q1.x();
     sqy = q1.y()*q1.y();
@@ -663,16 +731,25 @@ void loop() {
       attitude = PI/2;
       bank = 0;
     }
-    if (test < -0.499*unit_) { // singularity at south pole, <-86.3 deg
+    else if (test < -0.499*unit_) { // singularity at south pole, <-86.3 deg
       heading = -2 * atan2(q1.x(),q1.w());
       attitude = -PI/2;
       bank = 0;
     }
-    heading = RAD_TO_DEG*atan2(2*q1.y()*q1.w()-2*q1.x()*q1.z() , sqx - sqy - sqz + sqw);
-    attitude = RAD_TO_DEG*asin(2*test/unit_);
-    bank = RAD_TO_DEG*atan2(2*q1.x()*q1.w()-2*q1.y()*q1.z() , -sqx + sqy - sqz + sqw);
+    else{
+    heading = RAD_TO_DEG*atan2(2*q1.y()*q1.w()-2*q1.x()*q1.z() , sqx - sqy - sqz + sqw); //PITCH
+    attitude = RAD_TO_DEG*asin(2*test/unit_);     //YAW
+    bank = RAD_TO_DEG*atan2(2*q1.x()*q1.w()-2*q1.y()*q1.z() , -sqx + sqy - sqz + sqw);  //ROLL
+    }
+*/
+    //use built in quat function to get Euler Angles
+    ori= q1.toEuler();
+    yaw= RAD_TO_DEG*ori.x();    //x represents the 1rd rotation, not rotation about the x axis (which would be roll)
+    pitch= RAD_TO_DEG*ori.y();  //y represents the 2rd rotation, not rotation about the y axis (although that would also be pitch)
+    roll= RAD_TO_DEG*ori.z();   //z represents the 3rd rotation, not rotation about the z axis (which would be yaw)
 
-
+    
+    
     //***KALMAN Filter Code***********
       //also do Accel/GPS/BMP KF here (once GPS gets new data, that's the bottleneck)
     Kt= millis()/1000.0;    //time in s
@@ -716,9 +793,9 @@ void loop() {
       //Note the ordering & frame change
       //Acc.x() is the sensor x direction (facing up)
       //might need to still change things around
-    U._entity[0][0]= Acc.y(); //earth fixed x Accel
-    U._entity[1][0]= Acc.z(); //earth fixed y Accel
-    U._entity[2][0]= (Acc.x()*cos(DEG_TO_RAD*0)*cos(DEG_TO_RAD*0)) -9.81; //earth fixed z Accel
+    U._entity[0][0]= Acc.x(); //earth fixed x Accel
+    U._entity[1][0]= Acc.y(); //earth fixed y Accel
+    U._entity[2][0]= (Acc.z()*cos(DEG_TO_RAD*0)*cos(DEG_TO_RAD*0)) -9.81; //earth fixed z Accel
     
     //predict new altitude (XS continually updates)
     XS= (A*XS)+(B*U);
@@ -900,7 +977,7 @@ void loop() {
     x_to_land= TinyGPSPlus::distanceBetween(0, gps_lon, 0, land_lon);
     y_to_land= TinyGPSPlus::distanceBetween(gps_lat, 0, land_lat, 0);
 
-    smartDelay(300);
+    //smartDelay(100);
     /*
     for(int n=0; n < 200 ;n++){ //100-300 is good... ~700 iterations can run per sec
       while (Serial2.available()){
@@ -988,7 +1065,7 @@ void loop() {
     if(Apogee_Passed == 1){
       //insert code here, ex: wait to fire main chutes
 
-      if(bmp_alt < Launch_ALT + ATST + 10){
+      if(bmp_alt < Launch_ALT + 250){   //eject main at 250m
         digitalWrite(PYRO2,HIGH); //fire main chute, just an example
         MAIN_FIRED= 1;
         P2_setting=1;
@@ -1119,7 +1196,7 @@ void loop() {
     //Send Fomat for Matlab UI (uncomment as needed)
       /*
     sprintf(send1,"@@@@@,%u,%u/%u/%u,%u:%u:%u,%.2f,%.2f,%.5f,%.5f,%.2f,%.2f,%.2f,%u",millis(),year(),month(),day(),hour(),minute(),second(),bmp_alt,gps_alt,gps_lat,gps_lon,vbatt1,test,fix_hdop,sats);
-    sprintf(send2,",%.3f,%.3f,%.3f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f",heading,attitude,bank,euler.x(),euler.y(),euler.z(),magnetometer.x(),magnetometer.y(),magnetometer.z(),gyroscope.x(),gyroscope.y(),gyroscope.z(),Acc.x(),Acc.y(),Acc.z());
+    sprintf(send2,",%.3f,%.3f,%.3f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f",yaw,pitch,roll,magnetometer.x(),magnetometer.y(),magnetometer.z(),gyroscope.x(),gyroscope.y(),gyroscope.z(),Acc.x(),Acc.y(),Acc.z());
     sprintf(send3,",%.1f,%.1f,%.1f,%.1f,%.1f,%u,%u,%u,%u,%u,%u,%.1f,%.1f,%.1f,%.5f,%.5f,%.5f,%.5f",temp,gps_vel,gps_dir,x_from_launch,y_from_launch,dir_from_launch,run_time,P1_setting,P2_setting,P3_setting,P4_setting,P5_setting,ATST,Launch_ALT,SEALEVELPRESSURE_HPA,launch_lat,launch_lon,land_lat,land_lon);
     sprintf(send4,",%u,%u,%u,%u,%s,%u,%u,%u,&&&&&",gps_descending,bmp_descending,bno_descending,state,Apogee_Passed,link2ground,ss);
     TELEMETRY_SERIAL.print(send1);
@@ -1131,12 +1208,13 @@ void loop() {
     //Send Fomat for Python UI (uncomment as needed)
     // /*
     BEGIN_SEND
-    SEND_VECTOR_ITEM(euler_angle  , euler)
+    //SEND_VECTOR_ITEM(euler_angle  , euler)
     SEND_VECTOR_ITEM(gyro         , gyroscope)
-    SEND_ITEM(temperature         , temp)
+    SEND_ITEM(tIMU         , temp)   //BNO055 Temp
     SEND_VECTOR_ITEM(magnetometer , magnetometer)
     SEND_VECTOR_ITEM(acceleration , Acc)
     SEND_ITEM(bmp_alt             , bmp_alt)
+    SEND_ITEM(bno_alt             , bno_alt)
     SEND_ITEM(gps_alt             , gps_alt)
     //SEND_ITEM(gps_lat           , gps_lat)
     TELEMETRY_SERIAL.print(F(";"));
@@ -1148,10 +1226,16 @@ void loop() {
     TELEMETRY_SERIAL.print(F("gps_lon"));
     TELEMETRY_SERIAL.print(F(":"));
     TELEMETRY_SERIAL.print(gps_lon,5);//more digits of precision
-    SEND_ITEM(heading             , heading)
-    SEND_ITEM(attitude            , attitude)
-    SEND_ITEM(bank                , bank)
-    SEND_ITEM(test                , test)
+    SEND_ITEM(roll                , roll)
+    SEND_ITEM(pitch               , pitch)
+    SEND_ITEM(yaw                 , yaw)
+    SEND_ITEM(Px                  , Px)
+    SEND_ITEM(Py                  , Py)
+    SEND_ITEM(Pz                  , Pz)
+    SEND_ITEM(oX                  , oX)
+    SEND_ITEM(oY                  , oY)
+    SEND_ITEM(oZ                  , oZ)
+    //SEND_ITEM(test                , test)
     SEND_ITEM(gps_vel             , gps_vel)
     SEND_ITEM(gps_dir             , gps_dir)
     SEND_ITEM(x_from_launch        , x_from_launch)
@@ -1167,10 +1251,6 @@ void loop() {
     SEND_ITEM(P3_setting          , P3_setting)
     SEND_ITEM(P4_setting          , P4_setting)
     SEND_ITEM(P5_setting          , P5_setting)
-    //SEND_ITEM(gps_d               , gps_descending)
-    //SEND_ITEM(bmp_d               , bmp_descending)
-    //SEND_ITEM(bmp_d2              , bmp_descending2)
-    //SEND_ITEM(bno_d               , bno_descending)
     SEND_ITEM(Apogee_Passed       , Apogee_Passed)
 
     SEND_ITEM(ATST                , ATST)
@@ -1178,8 +1258,6 @@ void loop() {
     SEND_ITEM(BMPcf               , SEALEVELPRESSURE_HPA)
     SEND_ITEM(launch_lat          , launch_lat)
     SEND_ITEM(launch_lon          , launch_lon)
-    //SEND_ITEM(land_lat            , land_lat)
-    //SEND_ITEM(land_lon            , land_lon)
 
     SEND_ITEM(Apogee_Passed       , Apogee_Passed)
     SEND_ITEM(run_time            , run_time)
@@ -1232,11 +1310,15 @@ void loop() {
     dataFile.print(minute());   dataFile.print(':');
     dataFile.print(second());
     //writing sensor values
-    WRITE_CSV_ITEM(heading)
-    WRITE_CSV_ITEM(attitude)
-    WRITE_CSV_ITEM(bank)
-    WRITE_CSV_ITEM(Acc.x())
-    WRITE_CSV_ITEM(gyroscope.x())
+    WRITE_CSV_ITEM(yaw)
+    WRITE_CSV_ITEM(pitch)
+    WRITE_CSV_ITEM(roll)
+    WRITE_CSV_ITEM(Px)
+    WRITE_CSV_ITEM(Py)
+    WRITE_CSV_ITEM(Pz)
+    WRITE_CSV_ITEM(oX)
+    WRITE_CSV_ITEM(oY)
+    WRITE_CSV_ITEM(oZ)
     WRITE_CSV_ITEM(bmp_alt)
     WRITE_CSV_ITEM(gps_alt)
     WRITE_CSV_ITEM(bno_alt)
@@ -1244,8 +1326,10 @@ void loop() {
     WRITE_CSV_ITEM(fix_hdop)
     WRITE_CSV_ITEM(vbatt1)
       //WRITE_CSV_VECTOR_ITEM(gyroscope)
+    WRITE_CSV_ITEM(Acc.x())  
     WRITE_CSV_ITEM(Acc.y())
     WRITE_CSV_ITEM(Acc.z())
+    WRITE_CSV_ITEM(gyroscope.x())
     WRITE_CSV_ITEM(gyroscope.y())
     WRITE_CSV_ITEM(gyroscope.z())
       //WRITE_CSV_VECTOR_ITEM(Acc)
@@ -1275,7 +1359,8 @@ void loop() {
     WRITE_CSV_ITEM(link2ground)
     WRITE_CSV_ITEM(state)
     WRITE_CSV_ITEM(Apogee_Passed)
-
+    WRITE_CSV_ITEM(dtGyro)
+    
     dataFile.println();
     dataFile.flush();
     sdtimer=millis();
