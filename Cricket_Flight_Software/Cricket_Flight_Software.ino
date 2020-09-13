@@ -671,7 +671,7 @@ void loop() {
     //on the other hand, it's probably best to keep the fusion on and just use a BMI088 to get super accurate vibration resistant gyro readings anyways. In addition, the fusion data
     //from the BNO can be compared to BMI088 after various flights
 
-    if(state==STAND_BY || state==TERMINAL_COUNT){
+    if(1){        //state==STAND_BY || state==TERMINAL_COUNT      If I can ever get the gyro code working...
       //oX/oY/oZ each respectively represent orientation about the x/y/z body axis
       oX= roll;
       oY= pitch;
@@ -681,9 +681,9 @@ void loop() {
     }
     else{
       //convert gyro rates to euler rates to a quaternion
-      dyaw +=   ( gyroscope.x() )*dtGyro;   //.z *should* be the rads/s rate about the z axis of the BMI055, so yaw rate
-      dpitch += ( gyroscope.y() )*dtGyro;   //.y *should* be the rads/s rate about the y axis of the BMI055, so pitch rate
-      droll +=  ( gyroscope.z() )*dtGyro;   //.x *should* be the rads/s rate about the z axis of the BMI055, so roll rate
+      dyaw =   ( gyroscope.x() )*dtGyro;   //.z *should* be the rads/s rate about the z axis of the BMI055, so yaw rate
+      dpitch = ( gyroscope.y() )*dtGyro;   //.y *should* be the rads/s rate about the y axis of the BMI055, so pitch rate
+      droll =  ( gyroscope.z() )*dtGyro;   //.x *should* be the rads/s rate about the z axis of the BMI055, so roll rate
 
       cy = cos(dyaw * 0.5);
       sy = sin(dyaw * 0.5);
@@ -692,12 +692,19 @@ void loop() {
       cr = cos(droll * 0.5);
       sr = sin(droll * 0.5);
       
-      rotQuat.w()= cr * cp * cy + sr * sp * sy;
-      rotQuat.x()= sr * cp * cy - cr * sp * sy;
-      rotQuat.y()= cr * sp * cy + sr * cp * sy;
-      rotQuat.z()= cr * cp * sy - sr * sp * cy;
+      //rotQuat.w()= cr * cp * cy + sr * sp * sy;
+      //rotQuat.x()= sr * cp * cy - cr * sp * sy;
+      //rotQuat.y()= cr * sp * cy + sr * cp * sy;
+      //rotQuat.z()= cr * cp * sy - sr * sp * cy;
+
+      imu::Quaternion rotQuat(cr*cp*cy+sr*sp*sy, sr*cp*cy-cr*sp*sy, cr*sp*cy+sr*cp*sy, cr*cp*sy-sr*sp*cy);
+      //imu::Quaternion oriQuat(cr*cp*cy+sr*sp*sy, sr*cp*cy-cr*sp*sy, cr*sp*cy+sr*cp*sy, cr*cp*sy-sr*sp*cy);
+      //oriQuat(cr*cp*cy+sr*sp*sy, sr*cp*cy-cr*sp*sy, cr*sp*cy+sr*cp*sy, cr*cp*sy-sr*sp*cy);  //does NOT work
+
       
+      //oriQuat= rotQuat*oriQuat;
       oriQuat= oriQuat*rotQuat;   //update the orientation storing quaternion
+      
       oriGyro= oriQuat.toEuler(); //convert the ori storing quat to euler angles (no gimbal lock issues!)
       oX= RAD_TO_DEG*oriGyro.z();   //oX is roll, .z() represents the 3rd euler rotation which is roll
       oY= RAD_TO_DEG*oriGyro.y();   //oY is pitch, .y() represents the 2nd euler rotation which is pitch
@@ -1022,9 +1029,10 @@ void loop() {
     if ( (run_time>0) && (state==TERMINAL_COUNT) && (run_time<BURN_TIME) ){ //FIX!
       SET_STATE(POWERED_ASCENT);
       //launch rocket
-      digitalWrite(PYRO3,HIGH);
+      
+      //digitalWrite(PYRO3,HIGH);
       //DROGUE_FIRED= 1;
-      P3_setting=1;
+      //P3_setting=1;
     }
     if ( (state==POWERED_ASCENT) && (run_time>BURN_TIME) ){
       SET_STATE(UNPOWERED_ASCENT);
