@@ -80,7 +80,7 @@ TinyGPSPlus gps;
 #define gps_dt 200 //time in ms between samples for neo m8n GPS
 
 //radio setup
-#define TELEMETRY_SERIAL Serial1 //Teensy 3.6 has to use Serial1 or higher
+#define TELEMETRY_SERIAL Serial //Serial for USB, Serial1 for 3.6, Serial5 or Serial8 for 4.1
 // 2/4/20 telem ACSII msgs are ~300 chars long= ~300 bytes ... 57600bits/s / (8bits+2extra)= 5760 bytes/s... = ~19 radio msgs/s MAX
 // 2-5 msgs/s is probably fine for the future, so we want ~600-1500 bytes/s, so no lower than 6000-15000 bits/s baud rate
 //I'm only showing the math here now b/c eventually we will want to lower the radio baud rates to get better range
@@ -88,10 +88,10 @@ TinyGPSPlus gps;
 #define read_dt 200 //time in ms between recieving telemetry packets
 
 //BMP388 setup
-#define BMP_SCK 13
-#define BMP_MISO 12
-#define BMP_MOSI 11
-#define BMP_CS 15
+#define BMP_SCK 32   //pin 27 for Teensy 4.1  //13 og    //LED no longer looks on because it sck won't share the same pin anymore!
+#define BMP_MISO 1  //pin 39 for Teensy 4.1   //12 og
+#define BMP_MOSI 0  //pin 26 for Teensy 4.1   //11 og
+#define BMP_CS 31  //pin 38 for Teensy 4.1    //15 og    
   //UPDATE B4 FLIGHT!!!
   //Calibration Factor for BMP388, chech local pressure b4 flight!
 float SEALEVELPRESSURE_HPA= 1014.22; //1013.25;  //in units of 100* Pa
@@ -99,16 +99,10 @@ Adafruit_BMP3XX bmp(BMP_CS, BMP_MOSI, BMP_MISO,  BMP_SCK);  //software SPI
 #define bmp_dt 100 //time in ms between samples for bmp388
 
 //BNO setup
-Adafruit_BNO055 bno = Adafruit_BNO055(55, 0x28, &Wire);//ID, Address, Wire
+Adafruit_BNO055 bno = Adafruit_BNO055(55, 0x28, &Wire1);//ID, Address, Wire   //try using &Wire1 for 4.1
 //use the syntax &Wire1, 2,... for SDA1, 2,... //55 as the only argument also works
 #define ori_dt 10   //time in ms between orientation updating
 #define bno_dt 50.0 //time in ms between samples for bno055
-  //Remaining issues: I haven't been able to get I2C ports on the teensy working
-  //other than SDA0 and SCL0... there is some sytax involving "&Wire"
-  //above in the BNO setup that I think is supposed to be changed but
-  //I have already tried using Wire1 and &Wire1 but the BNO
-  //didnt give data when I connected it to the SCL1/SDA1 ports on the
-  //teensy... long story short I could use some help here
 
 //SD logging setup
 File dataFile;
@@ -116,15 +110,15 @@ char filename[] = "DATA000.csv";
 #define sd_dt 200 //time in ms between data points in csv file logging
 
 //Battery Reading Setup
-#define Batt_V_Read 14  %A0
+#define Batt_V_Read 14  //A0    //for Teensy 4.1, use A17 (41) & A16 (40) for batt & charge (grid) voltage
 double reading;
 double vbatt1;
 int voltage_divider_ratio= 11; //(default 6) use 11 if using a 1k resistor instead of a 2k 
 
 //Pin setup
 #define LED 13 //Error LED, refers to builtin LED on teensy
-#define PYRO1 24  //PWM capable
-#define PYRO2 25  //PWM capable
+#define PYRO1 24  //PWM capable on Teensy 4.1
+#define PYRO2 25  //PWM capable on Teensy 4.1
 #define PYRO3 26
 #define PYRO4 27
 #define PYRO5 28        //Camera on/off Pin
@@ -431,8 +425,23 @@ void abort_autosequence() {   //need to check if data is still logged after an a
 
 
 void setup() {
+
+  Wire1.begin();   //I was able to successfully use Wire.begin instead of Wire1.begin 
+  //(might need to experiment w/ Teensy 4.1 if I wanted to use one of the 3 other I2C busses for some reason
+  //alll that really matters is that I can use the pins I want
+  //using Wire1.begin() without manually setting pins also works!
+  
+  //Wire.setSDA(38); //use SDA1 for Teensy 3.6
+  //Wire.setSCL(37); //use SCL1 for Teensy 3.6
+  //Wire.setSDA(17); //use SDA1 for Teensy 4.1
+  //Wire.setSCL(16); //use SCL1 for Teensy 4.1
+
+  //Similarly, SPI.setMOSI(pin), SPI.setMISO(pin), and SPI.setSCK(pin)
+  SPI1.begin(); 
+  
   setSyncProvider(getTeensy3Time);
-  Serial2.begin(GPSBaud); //Serial2 is the radio
+  Serial2.begin(GPSBaud); //Serial2 is the radio        pins 9&10 are no longer serial on Teensy 4.1
+  //use serial8 and serial5 for radio and GPS (whichever is closer for each respectively)
   TELEMETRY_SERIAL.begin(57600); TELEMETRY_SERIAL.println();
 
   // Teensy RTC error/success config
