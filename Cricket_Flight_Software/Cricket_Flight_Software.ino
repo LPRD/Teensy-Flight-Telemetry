@@ -66,9 +66,9 @@ int BURN_TIME= 1600; //ms //Update b4 Flight! J425=1.6s burn time
 
  // /*
 void SET_STATE(state_t STATE){
-  TELEMETRY_SERIAL.println(F("Hello????"));
+  //TELEMETRY_SERIAL.println(F("Hello????"));
   state= STATE;
-  TELEMETRY_SERIAL.println(F("Hello???"));
+  //TELEMETRY_SERIAL.println(F("Hello???"));
 }
 // */
 
@@ -98,7 +98,7 @@ float SEALEVELPRESSURE_HPA= 1014.22; //1013.25;  //in units of 100* Pa
 Adafruit_BMP3XX bmp(BMP_CS, BMP_MOSI, BMP_MISO,  BMP_SCK);  //software SPI
 #define bmp_dt 100 //time in ms between samples for bmp388
 
-//BNO setup
+//BNO setup       //for Teensy 4.1, try just Adafruit_BNO055(55); or 0x29
 Adafruit_BNO055 bno = Adafruit_BNO055(55, 0x28, &Wire1);//ID, Address, Wire   //try using &Wire1 for 4.1
 //use the syntax &Wire1, 2,... for SDA1, 2,... //55 as the only argument also works
 #define ori_dt 10   //time in ms between orientation updating
