@@ -20,7 +20,9 @@
 
 
 
-
+#define CPU_RESTART_ADDR (uint32_t *)0xE000ED0C
+#define CPU_RESTART_VAL 0x5FA0004
+#define CPU_RESTART (*CPU_RESTART_ADDR = CPU_RESTART_VAL);
 
 
 
@@ -38,10 +40,10 @@
 */
 
 #define HEARTBEAT_TIMEOUT  5000     //5 sec
-#define BURN_TIME 1600              //1.6 sec, Update b4 Flight! J425=1.6s burn time
+//#define BURN_TIME 1600              //1.6 sec, Update b4 Flight! J425=1.6s burn time
 #define LIFTOFF_ACC_THRESH 13.0     //Liftoff Acceleration Threshold in m/s^2- only arm once stationary on the pad
 
-#define TELEMETRY_SERIAL Serial    //Serial for USB, Serial1 for 3.6, Serial5 or Serial8 for 4.1
+#define TELEMETRY_SERIAL Serial8    //Serial for USB, Serial1 for 3.6, Serial5 or Serial8 for 4.1
 
 #define Timer10ms   10    //100Hz-   dataIndex%1==0    Timer100Hz, Ori, Kalman, 100Hz sensors (BNO, BMP), falling logic, state change logic, sd logging logic,
   //25Hz sd logging ex: if(i%4==0){ WRITE_CSV_ITEM(Data25[i/4].SIV) }
@@ -118,7 +120,7 @@
 typedef enum {
   STAND_BY,
   ARMED,            //button activated
-  POWERED_ASCENT,   //if (state==ARMED) && (Data100[dataIndex].Acc.z() > LIFTOFF_ACC_THRESH) )
+  POWERED_ASCENT,   //if (state==ARMED) && (Data100[dataIndex].accZ > LIFTOFF_ACC_THRESH) )
   UNPOWERED_ASCENT, //if (state==POWERED_ASCENT) && (Data100[dataIndex].run_time>BURN_TIME)
   FREEFALL,         //if (state==UNPOWERED_ASCENT) && (Data100[dataIndex].Apogee_Passed == 1)
   DROGUE_DESCENT,   //if (state==FREEFALL) && (Data100[dataIndex].DROGUE_FIRED==1)
@@ -131,7 +133,7 @@ state_t state = STAND_BY;
 
 //**********Define data types that holds important information***************************************
 
-#define Num_Datapoints 10000      //hold the last 100 seconds of data... must be ~ < 20,000 (23,000 for initial commit)
+#define Num_Datapoints 1000      //hold the last 100 seconds of data... must be ~ < 20,000 (23,000 for initial commit)
 /*  If Num_Datapoints is set to be too large (take up too much flash memory):
       section `.text.progmem' will not fit in region `FLASH'
       c:/program files (x86)/arduino/hardware/tools/arm/bin/../lib/gcc/arm-none-eabi/5.4.1/../../../../arm-none-eabi/bin/ld.exe: region `FLASH' overflowed by 26119452 bytes
@@ -145,28 +147,35 @@ uint32_t dataLast[NumPrevDataPtIndices];   //arry that stores the indices of the
 
 struct data100hz_t{
   //Flow Control
-  uint64_t loopIteration;         //how many times the void loop has iterated (not super important, just interesting)
+  //uint64_t loopIteration;         //how many times the void loop has iterated (not super important, just interesting)
   state_t state;                  //Data100[dataIndex].state= state; 
   //Logistical
   bool ss;                        //ss is sensor status
   uint32_t abort_time;
-  int32_t run_time;
+  int32_t run_time;               //can be negative if countdown is set
   //I/O
-  bool P1_setting, P2_setting, P3_setting, P4_setting, P5_setting;
   //orientation
-  double dtGyro;                  //in seconds
+  double dtGyro;                            //in seconds
   //Kalman Filter
   float Px, Py, Pz, Vx, Vy, Vz; //, PzKp, PzCp;    //need to be set to 0
   //BNO055
-  imu::Vector<3> ori;
-  imu::Vector<3> oriGyro;
-  imu::Vector<3> gyroscope;
-  imu::Vector<3> euler;
-  imu::Vector<3> Acc;
-  imu::Quaternion q1;
-  imu::Quaternion oriQuat;        //orientation storing quaternion
+    //imu::Vector<3> ori;
+  //double oriX, oriY, oriZ;                //yaw, pitch, roll effectively handle these values
+    //imu::Vector<3> oriGyro;
+  //double oriGyroX, oriGyroY, oriGyroZ;    //oX, oY, oZ effectively handle these values
+    //imu::Vector<3> gyroscope;
+  double gyroX, gyroY, gyroZ;
+  //imu::Vector<3> euler;
+  double eulerX, eulerY, eulerZ;
+  //imu::Vector<3> Acc;
+  double accX, accY, accZ;
+  //imu::Quaternion q1;
+  double qW, qX, qY, qZ;                    //sensor fusion quaternion values
+  //imu::Quaternion oriQuat;                //orientation storing quaternion
+  double oriQuatW, oriQuatX, oriQuatY, oriQuatZ;    //gyro orientation based quaternion values
+  
   //imu::Quaternion rotQuat;        //new rotation quaternion based on gyro rates * dt for each iteration
-  double roll, pitch, yaw, oX, oY, oZ;
+  double roll, pitch, yaw, oX, oY, oZ;      
   /*
   double heading;
   double attitude;
@@ -183,7 +192,7 @@ struct data100hz_t{
 struct data25hz_t{
   //GPS
   bool gps_descending;
-  uint8_t SIV, fixType;
+  int SIV, fixType;
   float PDOP;                             //Positional diminution of precision
   double gps_lat, gps_lon, gps_alt;
     //Below values are Cardinal= in the N/E/S/W plane, NO up/down component!
@@ -194,11 +203,12 @@ struct data25hz_t{
   double xy_from_launch;
   double dir_from_launch;                 //Cardinal dir from launch pt in deg, N=0, E=90...
   double xy_to_land;                      //Cardinal distance in m to land pt
-  double xy_dir_to_land;                  //Cardinal direction in deg to land pt
+  double dir_to_land;                  //Cardinal direction in deg to land pt
 };
 
 struct data10hz_t{
-  imu::Vector<3> magnetometer;
+  float mx, my, mz;
+  //imu::Vector<3> magnetometer;
 };
 
 struct data4hz_t{
@@ -208,7 +218,7 @@ struct data4hz_t{
 struct data1hz_t{
   //Flow Control
   float gpsRate, radioRate, readRate, bmpRate, bnoRate, sdRate, fallRate, oriRate;    //All in Hz
-  float gpsT, radioT, readT, bmpT, bnoT, sdT, fallT, oriT;                            //All in ms
+  double gpsT, radioT, readT, bmpT, bnoT, sdT, fallT, oriT;                            //All in ms
   uint16_t y;
   uint8_t mo, d, h, m, s;
   //Logistical
@@ -217,6 +227,7 @@ struct data1hz_t{
   float temp;                     //bno temp
   //BMP388
   float bmp_temp;
+  bool P1_setting, P2_setting, P3_setting, P4_setting, P5_setting, P5V_setting;
 };
 
 //Create arrays of various data type objects to store the last x seconds of data in flash memory
@@ -228,11 +239,12 @@ data4hz_t   Data4[Num_Datapoints/25] PROGMEM;
 data1hz_t   Data1[Num_Datapoints/100] PROGMEM;
 */
 
-data100hz_t Data100[Num_Datapoints] PROGMEM;
-data25hz_t  Data25[Num_Datapoints/4] PROGMEM;
-data10hz_t  Data10[Num_Datapoints/10] PROGMEM;
-data4hz_t   Data4[Num_Datapoints/25] PROGMEM;
-data1hz_t   Data1[Num_Datapoints/100] PROGMEM;
+
+data100hz_t Data100[Num_Datapoints] ;
+data25hz_t  Data25[Num_Datapoints/4] ;
+data10hz_t  Data10[Num_Datapoints/10] ;
+data4hz_t   Data4[Num_Datapoints/25] ;
+data1hz_t   Data1[Num_Datapoints/100] ;
 
 
 
@@ -268,7 +280,8 @@ int S4_Offset= 0;
 //******************Internal Variables (not recorded over time)*********************************
 //Timers
 uint32_t gpstimer=0, gpsCount=0, radiotimer=0, radioCount=0, readtimer=0, readCount=0, bmptimer=0, bmpCount=0, bnotimer=0, bnoCount=0, sdtimer=0, sdCount=0, falltimer=0, fallCount=0, oritimer=0, oriCount=0, heartbeat_time=0;
-uint64_t thisLoopMicros=0, startTimeMicros=0, lastGyroUpdate=0, startTime=0, loopIteration=0;
+uint64_t startTimeMicros=0, lastGyroUpdate=0, startTime=0, loopIteration=0;
+uint64_t thisLoopMillis=0, thisLoopMicros=0, thisLoopMicros2=0;
 
 //SD
 File dataFile;
@@ -306,6 +319,15 @@ double bno_alt_new [10]= {0,0,0,0,0,0,0,0,0,0};
 double bno_alt_last_avg= 0;
 double bno_alt_new_avg= 0;
 int bno_descending_counter= 0;
+imu::Vector<3> magnetometer;
+imu::Vector<3> ori;
+imu::Vector<3> oriGyro;
+imu::Vector<3> gyroscope;
+imu::Vector<3> euler;
+imu::Vector<3> Acc;
+imu::Quaternion q1;
+imu::Quaternion oriQuat;        //orientation storing quaternion
+
 
 //KALMAN Filter variables
   //State Covariance Matrix P
@@ -378,8 +400,11 @@ int gps_descending_counter= 0;
 double sum=0, sum2=0, sum3=0;
 bool bno_descending=0, bmp_descending=0, Apogee_Passed=0, DROGUE_FIRED=0, MAIN_FIRED=0, gps_descending=0;     //HAVE TO HAVE THESE
 uint32_t liftoff_time= 0;         //liftoff_time (static time in ms when system state becomes POWERED_ASCENT)
-uint32_t start_time= 0;          //start_time (static time in ms when system state becomes ARMED)
-
+uint32_t BURN_TIME= 1600;         //since this is a variable, I could change it
+uint32_t start_time= 0;           //start_time (static time in ms when system state becomes ARMED)
+bool P1_setting= 0, P2_setting= 0, P3_setting= 0, P4_setting=0 , P5_setting=0, P5V_setting= 0;
+double sdT;
+float sdRate= 0;
 
 //Helper functions  
 void SET_STATE(state_t STATE){
@@ -422,7 +447,7 @@ void heartbeat() {
 }
 
 //FIX
-void (*reset)(void) = 0;
+//void (*reset)(void) = 0;
 
 void write_state(const char *state_name) {    //send state (can be asynchronous)
   SEND(status, state_name);
@@ -505,6 +530,12 @@ time_t getTeensy3Time(){
 void setup() {
   //Start Teensy RTC- this line doesn't seem to matter, see Teensy Time Lib Documentation
   //setSyncProvider(getTeensy3Time);
+  //Serial.begin(115200);
+  //Start Serial Radio- use serial5 or serial8
+  TELEMETRY_SERIAL.begin(57600);
+  delay(2000);
+  TELEMETRY_SERIAL.println();
+  TELEMETRY_SERIAL.println();
   
   //Start I2C
   //Wire.setSDA(17); Wire.setSCL(16); //use SDA1, SCL1 for Teensy 4.1
@@ -547,28 +578,12 @@ void setup() {
   }  
   */
   //Check Nav Frequency
-  /*
+  // /*
   byte rate = myGPS.getNavigationFrequency(); //Get the update rate of this module
   TELEMETRY_SERIAL.print("Current update rate:");
   TELEMETRY_SERIAL.println(rate);
-  */
+  // */
   myGPS.saveConfiguration();
-  
-  //Start Serial Radio- use serial5 or serial8
-  TELEMETRY_SERIAL.begin(57600);
-  /*
-  while(TELEMETRY_SERIAL.begin(57600) == false){
-    TELEMETRY_SERIAL.println(F("Radio err"));
-    digitalWrite(LED,LOW); delay(1000); 
-    //3 Pulses
-    digitalWrite(LED,HIGH); delay(100); 
-    digitalWrite(LED,LOW); delay(100);
-    digitalWrite(LED,HIGH); delay(100);
-    digitalWrite(LED,LOW); delay(100);
-    digitalWrite(LED,HIGH); delay(100);
-    Data100[0].ss=0;
-  }
-  */
   
   //Start BMP388
   while (!bmp.begin()) {                         //flashes to signal error
@@ -628,11 +643,13 @@ void setup() {
         dataFile = SD.open(filename, FILE_WRITE);
         TELEMETRY_SERIAL.print(F("\twriting "));
         TELEMETRY_SERIAL.println(filename);
-        dataFile.print(F("abs time,sys date,sys time,yaw (psy),pitch (theta),roll (phi),Px,Py,Pz,oX,oY,oZ,bmp alt,gps alt,bno alt"));
-        dataFile.print(F(",sats,hdop,vbatt,x accel,y accel,z accel,x gyro,y gyro,z gyro"));
-        dataFile.print(F(",gps lat,gps lon,gps vel,gps dir,x_from_launch,y_from_launch,dir_from_launch"));
-        dataFile.print(F(",xy_to_land,xy_dir_to_land,x_to_land,y_to_land"));
-        dataFile.println(F(",bmp pressure,bmp temp,bno temp,qw,qx,qy,qz,test,x euler,y euler,z euler,x mag,y mag,z mag,l2g,System State,Apogee Passed,dtGyro"));
+        dataFile.print(F("run time (ms),date (y/m/d),time (H:M:S),yaw (deg),pitch (deg),roll (deg),Px (m),Py (m),Pz (m),Vx (m/s),Vy (m/s),Vz (m/s),oX (deg),oY (deg),oZ (deg),bmp alt (m ASL),bno alt (m ASL),gyroX (dps),gyroY (dps),gyroZ (dps),accX (m/s^2),accY (m/s^2),accZ (m/s^2),bmp pressure (hpa),qW [Fusion],qX,qY,qZ"));
+        dataFile.print(F(",oriQuatW [gyro],oriQuatX,oriQuatY,oriQuatZ,eulerX (deg),eulerY (deg),eulerZ (deg),state,Apogee Passed,bno descending,bmp descending,gps alt (m ASL),SIV,PDOP (m),Lattitude,Longitude"));
+        //commentable one
+        //dataFile.print(F(",x from launch (m),y from launch (m),dir from launch (deg CW from N),xy to land (m),dir to land (deg CW from N),x to land (m),y to land (m)"));   
+        dataFile.print(F(",gps descending,mX (uT),mY (uT),mZ (uT),l2g,vbatt (V),vgrid (V),bmp temp (C),bno temp (C),gpsR (Hz),radioR (Hz),readR (Hz),bmpR (Hz),bnoR (Hz),sdR (Hz),fallR (Hz),oriR (Hz)"));
+        dataFile.println(F(",gpsT (*ms*),radioT (us),readT (us),bmpT (us),bnoT (*ms*),sdT (us),fallT (us),oriT (us),P1,P2,P3,P4,P5,P5V"));
+        
         break;
       }
     }
@@ -814,7 +831,7 @@ void setup() {
   }
   */
   
-  Data100[0].q1 = bno.getQuat();   //I don't think this needs to be run here, oriQuat can still equal q1 even if q1 doesn't have values yet, right?
+  q1 = bno.getQuat();   //I don't think this needs to be run here, oriQuat can still equal q1 even if q1 doesn't have values yet, right?
   
   //Loop Timers
   startTimeMicros= micros();  //Time when loop was started (microseconds)
@@ -833,27 +850,28 @@ void setup() {
 
 
 void loop() {
-  if(millis()-Timer100Hz > Timer10ms){      //100hz max
+ 
+  if( (millis()-Timer100Hz) > Timer10ms){      //100hz max
     dataLoopIteration++;
     dataIndex= dataLoopIteration % Num_Datapoints;
-    Data100[dataIndex].loopIteration = loopIteration;
+    //Data100[dataIndex].loopIteration = loopIteration;
 
-    // /*
+    // 
     if(dataLoopIteration > NumPrevDataPtIndices){
       for(int i = 0; i < NumPrevDataPtIndices; i++){
         dataLast[i]= (dataLoopIteration - i - 1) % Num_Datapoints;
       }
     }
-    // */
+    // 
     
     //it makes more sense to use if(dataLoopIteration > NumPrevDataPtIndices) before each code section that references previous values
-     /*
-    else{
-      for(int i = 0; i < NumPrevDataPtIndices; i++){
-        dataLast[i]= 0;
-      }
-    }
-     */
+     
+    //else{
+    //  for(int i = 0; i < NumPrevDataPtIndices; i++){
+    //    dataLast[i]= 0;
+    //  }
+    //}
+     
     
     //Update run_time (time starting at liftoff (having a countdown can make run_time negative))
     if( (state != ARMED) && (state != STAND_BY) && (state != LANDED) ){
@@ -874,12 +892,16 @@ void loop() {
 
     //*****Orientations Section****************************************************************
     thisLoopMicros= micros();
+    thisLoopMillis= millis();
     
     Data100[dataIndex].dtGyro = (double)(thisLoopMicros - lastGyroUpdate) / 1000000.0;
     lastGyroUpdate = thisLoopMicros;
     
     //get gyro data all the time for logging:
-    //Data100[dataIndex].gyroscope= bno.getVector(Adafruit_BNO055::VECTOR_GYROSCOPE);     //100hz, dps
+    gyroscope= bno.getVector(Adafruit_BNO055::VECTOR_GYROSCOPE);     //100hz, dps
+    Data100[dataIndex].gyroX= gyroscope.x();
+    Data100[dataIndex].gyroY= gyroscope.y();
+    Data100[dataIndex].gyroZ= gyroscope.z();
     //Data100[dataIndex].gyroscope.x()
     //it might be a good idea to set the BNO to a non-fusion mode after launch so that the dps can be set to 250 vs 2000 for more accurate gyro orientation
     //on the other hand, it's probably best to keep the fusion on and just use a BMI088 to get super accurate vibration resistant gyro readings anyways. In addition, the fusion data
@@ -891,13 +913,13 @@ void loop() {
       Data100[dataIndex].oY= Data100[dataIndex].pitch;
       Data100[dataIndex].oZ= Data100[dataIndex].yaw;
       //use sensor fusion quat for current orientation
-      Data100[dataIndex].oriQuat= Data100[dataIndex].q1;
+      oriQuat= q1;
     }
     else{
       //convert gyro rates to euler rates to a quaternion
-      dyaw =   ( Data100[dataIndex].gyroscope.x() )*Data100[dataIndex].dtGyro;   //.z *should* be the rads/s rate about the z axis of the BMI055, so yaw rate
-      dpitch = ( Data100[dataIndex].gyroscope.y() )*Data100[dataIndex].dtGyro;   //.y *should* be the rads/s rate about the y axis of the BMI055, so pitch rate
-      droll =  ( Data100[dataIndex].gyroscope.z() )*Data100[dataIndex].dtGyro;   //.x *should* be the rads/s rate about the z axis of the BMI055, so roll rate
+      dyaw =   ( Data100[dataIndex].gyroX )*Data100[dataIndex].dtGyro;   //.z *should* be the rads/s rate about the z axis of the BMI055, so yaw rate
+      dpitch = ( Data100[dataIndex].gyroY )*Data100[dataIndex].dtGyro;   //.y *should* be the rads/s rate about the y axis of the BMI055, so pitch rate
+      droll =  ( Data100[dataIndex].gyroZ )*Data100[dataIndex].dtGyro;   //.x *should* be the rads/s rate about the z axis of the BMI055, so roll rate
 
       cy = cos(dyaw * 0.5);
       sy = sin(dyaw * 0.5);
@@ -920,30 +942,51 @@ void loop() {
 
       
       //oriQuat= rotQuat*oriQuat;
-      Data100[dataIndex].oriQuat= Data100[dataIndex].oriQuat*rotQuat;   //update the orientation storing quaternion
+      oriQuat= oriQuat*rotQuat;   //update the orientation storing quaternion
+      Data100[dataIndex].oriQuatW= oriQuat.w();
+      Data100[dataIndex].oriQuatX= oriQuat.x();
+      Data100[dataIndex].oriQuatY= oriQuat.y();
+      Data100[dataIndex].oriQuatZ= oriQuat.z();
       
-      Data100[dataIndex].oriGyro= Data100[dataIndex].oriQuat.toEuler(); //convert the ori storing quat to euler angles (no gimbal lock issues!)
-      Data100[dataIndex].oX= RAD_TO_DEG*Data100[dataIndex].oriGyro.z();   //oX is roll, .z() represents the 3rd euler rotation which is roll
-      Data100[dataIndex].oY= RAD_TO_DEG*Data100[dataIndex].oriGyro.y();   //oY is pitch, .y() represents the 2nd euler rotation which is pitch
-      Data100[dataIndex].oZ= RAD_TO_DEG*Data100[dataIndex].oriGyro.x();   //oZ is yaw, .x() represents the 1rd euler rotation which is yaw
+      oriGyro= oriQuat.toEuler(); //convert the ori storing quat to euler angles (no gimbal lock issues!)
+      //Data100[dataIndex].oriGyroX
+      Data100[dataIndex].oX= oriGyro.z();   //oX is roll, .z() represents the 3rd euler rotation which is roll
+      Data100[dataIndex].oY= oriGyro.y();   //oY is pitch, .y() represents the 2nd euler rotation which is pitch
+      Data100[dataIndex].oZ= oriGyro.x();   //oZ is yaw, .x() represents the 1rd euler rotation which is yaw
     }
 
     oriCount++;
     if(dataIndex%100 == 0){   //mod 100 -> 1Hz
       Data1[dataIndex/100].oriRate= oriCount / ( (millis() - startTime) / 1000.0);
-      Data1[dataIndex/100].oriT= ( thisLoopMicros - micros() ) / 1000.0;
+      //Data1[dataIndex/100].oriT= (millis() - thisLoopMillis)*1000.0;     
+      Data1[dataIndex/100].oriT= ( micros() - thisLoopMicros );
     }
     //*****END Orientations Section****************************************************************
 
     //*****BNO, KALMAN, GPS Section****************************************************************
     thisLoopMicros= micros();
-
-    Data100[dataIndex].euler         = bno.getVector(Adafruit_BNO055::VECTOR_EULER);         //default deg, ***sensor fusion***
-    Data100[dataIndex].q1            = bno.getQuat();                                        //unitless, ***sensor fusion***
-    Data100[dataIndex].gyroscope     = bno.getVector(Adafruit_BNO055::VECTOR_GYROSCOPE);     //default dps
-    Data100[dataIndex].Acc           = bno.getVector(Adafruit_BNO055::VECTOR_ACCELEROMETER); //default m/s^2
+    //thisLoopMicros2= micros();
+    thisLoopMillis= millis();
+    
+    euler         = bno.getVector(Adafruit_BNO055::VECTOR_EULER);         //default deg, ***sensor fusion***
+    Data100[dataIndex].eulerX= euler.x();
+    Data100[dataIndex].eulerY= euler.y();
+    Data100[dataIndex].eulerZ= euler.z();
+    q1            = bno.getQuat();                                        //unitless, ***sensor fusion***
+    Data100[dataIndex].qW= q1.w();
+    Data100[dataIndex].qX= q1.x();
+    Data100[dataIndex].qY= q1.y();
+    Data100[dataIndex].qZ= q1.z();
+    //gyroscope     = bno.getVector(Adafruit_BNO055::VECTOR_GYROSCOPE);     //default dps       performed in ori section
+    Acc           = bno.getVector(Adafruit_BNO055::VECTOR_ACCELEROMETER); //default m/s^2
+    Data100[dataIndex].accX= Acc.x();
+    Data100[dataIndex].accY= Acc.y();
+    Data100[dataIndex].accZ= Acc.z();
     if(dataIndex%10 == 0){          //20Hz
-      Data10[dataIndex/10].magnetometer = bno.getVector(Adafruit_BNO055::VECTOR_MAGNETOMETER);  //default microT
+      magnetometer = bno.getVector(Adafruit_BNO055::VECTOR_MAGNETOMETER);  //default microT
+      Data10[dataIndex/10].mx= magnetometer.x();
+      Data10[dataIndex/10].my= magnetometer.y();
+      Data10[dataIndex/10].mz= magnetometer.z();
     }
     if(dataIndex%100 == 0){          //1Hz
     Data1[dataIndex/100].temp            = bno.getTemp();                                        //default C
@@ -974,11 +1017,15 @@ void loop() {
     }
     */
 
+    
     //use built in quat function to get Euler Angles
-    Data100[dataIndex].ori=   Data100[dataIndex].q1.toEuler();
-    Data100[dataIndex].yaw=   RAD_TO_DEG*Data100[dataIndex].ori.x();    //x represents the 1rd rotation, not rotation about the x axis (which would be roll)
-    Data100[dataIndex].pitch= RAD_TO_DEG*Data100[dataIndex].ori.y();  //y represents the 2rd rotation, not rotation about the y axis (although that would also be pitch)
-    Data100[dataIndex].roll=  RAD_TO_DEG*Data100[dataIndex].ori.z();   //z represents the 3rd rotation, not rotation about the z axis (which would be yaw)
+    ori=   q1.toEuler();
+    //Data100[dataIndex].oriX= RAD_TO_DEG*ori.x();
+    //Data100[dataIndex].oriY= RAD_TO_DEG*ori.y();
+    //Data100[dataIndex].oriZ= RAD_TO_DEG*ori.z();
+    Data100[dataIndex].yaw=   RAD_TO_DEG*ori.x();    //x represents the 1rd rotation, not rotation about the x axis (which would be roll)
+    Data100[dataIndex].pitch= RAD_TO_DEG*ori.y();  //y represents the 2rd rotation, not rotation about the y axis (although that would also be pitch)
+    Data100[dataIndex].roll=  RAD_TO_DEG*ori.z();   //z represents the 3rd rotation, not rotation about the z axis (which would be yaw)
 
     //***KALMAN Filter Code*********** (could always add more filters w/ different sensors for different estimates)
     Kt= millis()/1000.0;    //time in s
@@ -1020,14 +1067,14 @@ void loop() {
     
     //Z faces up in current config
     if(state==STAND_BY || state==ARMED || state==POWERED_ASCENT || state==UNPOWERED_ASCENT || state==LANDED){ //Earth's gravity actin on IMU
-      U._entity[0][0]= Data100[dataIndex].Acc.x(); //earth fixed x Accel
-      U._entity[1][0]= Data100[dataIndex].Acc.y(); //earth fixed y Accel
-      U._entity[2][0]= (Data100[dataIndex].Acc.z()*cos(DEG_TO_RAD*0)*cos(DEG_TO_RAD*0)) -9.81; //earth fixed z Accel
+      U._entity[0][0]= Data100[dataIndex].accX; //earth fixed x Accel
+      U._entity[1][0]= Data100[dataIndex].accY; //earth fixed y Accel
+      U._entity[2][0]= (Data100[dataIndex].accZ*cos(DEG_TO_RAD*0)*cos(DEG_TO_RAD*0)) -9.81; //earth fixed z Accel
     }
     else{ //IMU in freefall
-      U._entity[0][0]= Data100[dataIndex].Acc.x(); //earth fixed x Accel
-      U._entity[1][0]= Data100[dataIndex].Acc.y(); //earth fixed y Accel
-      U._entity[2][0]= (Data100[dataIndex].Acc.z()*cos(DEG_TO_RAD*0)*cos(DEG_TO_RAD*0)); //earth fixed z Accel
+      U._entity[0][0]= Data100[dataIndex].accX; //earth fixed x Accel
+      U._entity[1][0]= Data100[dataIndex].accY; //earth fixed y Accel
+      U._entity[2][0]= (Data100[dataIndex].accZ*cos(DEG_TO_RAD*0)*cos(DEG_TO_RAD*0)); //earth fixed z Accel
     }
     
     //predict new states (XS continually updates)
@@ -1036,24 +1083,29 @@ void loop() {
   
     //****Update States w/ GPS Measurement*********
     if(dataIndex%4 == 0){
-      thisLoopMicros= micros();
+          //thisLoopMicros= micros();
+    thisLoopMicros2= micros();
+      //thisLoopMillis= millis();
 
       Data25[dataIndex/4].fixType = myGPS.getFixType();
       Data25[dataIndex/4].SIV = myGPS.getSIV();
+      thisLoopMicros2= micros();
       Data25[dataIndex/4].PDOP = myGPS.getPDOP() / 100.0;  //m
       Data25[dataIndex/4].gps_alt= myGPS.getAltitude() / 1.0E3; //m ASL
       Data25[dataIndex/4].gps_lon= myGPS.getLongitude() / 1.0E7;
       Data25[dataIndex/4].gps_lat= myGPS.getLatitude() / 1.0E7;
+      
       //can add in xy velocity and heading at some point (see library)
+      /*
       Data25[dataIndex/4].x_from_launch= TinyGPSPlus::distanceBetween(0, launch_lon, 0, Data25[dataIndex/4].gps_lon);
       Data25[dataIndex/4].y_from_launch= TinyGPSPlus::distanceBetween(launch_lat, 0, Data25[dataIndex/4].gps_lat, 0);
         //add Data25[dataIndex/4].xy_from_launch here at some point
       Data25[dataIndex/4].dir_from_launch= TinyGPSPlus::courseTo(launch_lat, launch_lon, Data25[dataIndex/4].gps_lat, Data25[dataIndex/4].gps_lon);
       Data25[dataIndex/4].xy_to_land= TinyGPSPlus::distanceBetween(Data25[dataIndex/4].gps_lat, Data25[dataIndex/4].gps_lon, land_lat, land_lon);
-      Data25[dataIndex/4].xy_dir_to_land= TinyGPSPlus::courseTo(Data25[dataIndex/4].gps_lat, Data25[dataIndex/4].gps_lon, launch_lat, launch_lon);
+      Data25[dataIndex/4].dir_to_land= TinyGPSPlus::courseTo(Data25[dataIndex/4].gps_lat, Data25[dataIndex/4].gps_lon, launch_lat, launch_lon);
       Data25[dataIndex/4].x_to_land= TinyGPSPlus::distanceBetween(0, Data25[dataIndex/4].gps_lon, 0, land_lon);
       Data25[dataIndex/4].y_to_land= TinyGPSPlus::distanceBetween(Data25[dataIndex/4].gps_lat, 0, land_lat, 0);
-
+      */
       //GPS apogee detection- determines an average alt from recent measurements, then compares to the average calculated on the previous cycle
         //takes 11 measurements (11 cycles) to fully populate the array
       for (int i=0;i<9;i++){
@@ -1068,7 +1120,8 @@ void loop() {
       gps_alt_new_avg= sum/10.0;
       sum=0;  //reset sum var for next use
       */
-  
+
+      
       gps_alt_new_avg= Avg_Last_N_Measurements(gps_alt_new, 10);
       
       if((gps_alt_last_avg > gps_alt_new_avg) && (Data100[dataIndex].bmp_alt > Launch_ALT + ATST)){
@@ -1081,14 +1134,16 @@ void loop() {
       } //prev alts now = current alts
       gps_alt_last_avg= gps_alt_new_avg;
       // */
-
+      
       //gps_alt_last= gps_alt_new[0];    //'invalid array assignment'
       //gps_alt_last_avg= gps_alt_new_avg;
+
       
       gpsCount++;
       if(dataIndex%100 == 0){   //mod 100 -> 1Hz
         Data1[dataIndex/100].gpsRate= gpsCount / ( (millis() - startTime) / 1000.0);
-        Data1[dataIndex/100].gpsT= ( thisLoopMicros - micros() ) / 1000.0;
+        //Data1[dataIndex/100].gpsT= millis() - thisLoopMillis;
+        Data1[dataIndex/100].gpsT= ( micros() - thisLoopMicros2 );
       }
 
       if(gps_descending != 1){
@@ -1145,6 +1200,9 @@ void loop() {
     sum=0;  //reset sum var for next use
     */
 
+
+
+    
     bno_alt_new_avg= Avg_Last_N_Measurements(bno_alt_new, 10);
     
     if((bno_alt_last_avg > bno_alt_new_avg) && (Data100[dataIndex].bno_alt > Launch_ALT + ATST)){
@@ -1158,6 +1216,9 @@ void loop() {
     bno_alt_last_avg= bno_alt_new_avg;
     // */
 
+
+
+    
     //bno_alt_last= bno_alt_new;  //arrays store the memory address of the first elm
     //bno_alt_last_avg= bno_alt_new_avg;
     
@@ -1175,12 +1236,14 @@ void loop() {
     bnoCount++;
     if(dataIndex%100 == 0){   //mod 100 -> 1Hz
       Data1[dataIndex/100].bnoRate= bnoCount / ( (millis() - startTime) / 1000.0);
-      Data1[dataIndex/100].bnoT= ( thisLoopMicros - micros() ) / 1000.0;
+      //Data1[dataIndex/100].bnoT= millis() - thisLoopMillis;
+      Data1[dataIndex/100].bnoT= ( micros() - thisLoopMicros );
     }
     //*****END BNO, KALMAN, GPS Section****************************************************************
 
     //*****BMP Section****************************************************************
     thisLoopMicros= micros();
+    thisLoopMillis= millis();
 
     if(dataIndex%100 == 0){
       Data1[dataIndex/100].bmp_temp=       bmp.temperature; //C
@@ -1205,6 +1268,8 @@ void loop() {
     sum=0;  //reset sum var for next use
     */
 
+
+    
     bmp_alt_new_avg= Avg_Last_N_Measurements(bno_alt_new, 10);
 
     // /*
@@ -1219,6 +1284,8 @@ void loop() {
     //not 100% sure about this one
     //bmp_alt_last_avg= Avg_Last_N_Measurements( (bno_alt_last + 10), 10);  //use the bno_alt_last array, but starting at index 10
 
+
+    
     if((bmp_alt_last_avg > bmp_alt_new_avg) && (Data100[dataIndex].bmp_alt > (Launch_ALT + ATST))){
       bmp_descending_counter= bmp_descending_counter + 1;
     }
@@ -1237,15 +1304,17 @@ void loop() {
     bmpCount++;
     if(dataIndex%100 == 0){   //mod 100 -> 1Hz
       Data1[dataIndex/100].bmpRate= bmpCount / ( (millis() - startTime) / 1000.0);
-      Data1[dataIndex/100].bmpT= ( thisLoopMicros - micros() ) / 1000.0;
+      //Data1[dataIndex/100].bmpT= (millis() - thisLoopMillis)*1000.0;     
+      Data1[dataIndex/100].bmpT= ( micros() - thisLoopMicros );
     }
     //*****END BMP Section****************************************************************
 
     //*****Fall Section****************************************************************
     thisLoopMicros= micros();
-
+    thisLoopMillis= millis();
+    
     //Code that is active before Apogee is Reached/Passed
-    if(Apogee_Passed == 0){
+    if( (Apogee_Passed == 0) && (state != ARMED) && (state != STAND_BY) ){
       Data100[dataIndex].Apogee_Passed = 0;
       //The following loop only trigger ONCE (when apogee is detected)
       if((gps_descending*1)+(bmp_descending*1)+(bno_descending*1) > 1){   //should be able to use either the struct or the normal version
@@ -1253,16 +1322,18 @@ void loop() {
         Data100[dataIndex].Apogee_Passed = 1;
         digitalWrite(PYRO1,HIGH);   //fire drouge chute
         DROGUE_FIRED= 1;                                //represents if the drogue chute has actually been fired
-        Data100[dataIndex].P1_setting= 1;              //for telem (P1_setting can be set to 1 without reaching apogee via the GUI)
+        P1_setting= 1;                                  //represents that P1 is high for the GUI
+        //Data1[dataIndex/100].P1_setting= 1;           //will fill in during read section
       }
     }
-    else{         //Continuous code that runs once Apogee is Reached/Passed
+    else if(Apogee_Passed == 1) {         //Continuous code that runs once Apogee is Reached/Passed
       Data100[dataIndex].Apogee_Passed = 1;
       //insert code here, ex: wait to fire main chutes or fire main chute when below a certain altitude
       if( Data100[dataIndex].bmp_alt < (Launch_ALT + 250) ){   //eject main at 250m
-        digitalWrite(PYRO2,HIGH);   //fire main chute, just an example
+        digitalWrite(PYRO2,HIGH);                       //fire main chute, just an example
         MAIN_FIRED= 1;                                  //mark that the main chute has actually been fired
-        Data100[dataIndex].P2_setting=1;               //for telem
+        P2_setting= 1;
+        //Data1[dataIndex].P2_setting=1;                //for logging
       }
     }
 
@@ -1270,9 +1341,9 @@ void loop() {
     sum= 0;   //leave this here in case I switch back to the avg function for the 2nd bmp avg
     if(dataLoopIteration > NumPrevDataPtIndices){
       for(int i = 0; i < NumPrevDataPtIndices; i++){
-        sum  += Data100[i].gyroscope.x();   //all in dps
-        sum2 += Data100[i].gyroscope.y();
-        sum3 += Data100[i].gyroscope.z();
+        sum  += Data100[i].gyroX;   //all in dps
+        sum2 += Data100[i].gyroY;
+        sum3 += Data100[i].gyroZ;
       }
       GyroAvgX= sum/NumPrevDataPtIndices;
       GyroAvgY= sum/NumPrevDataPtIndices;
@@ -1283,11 +1354,11 @@ void loop() {
     }
     
     //state machine:
-    if ( (state==ARMED) && (Data100[dataIndex].Acc.z() > LIFTOFF_ACC_THRESH) ){
+    if ( (state==ARMED) && (Data100[dataIndex].accZ > LIFTOFF_ACC_THRESH) ){
       SET_STATE(POWERED_ASCENT);
       liftoff_time= millis();
     }
-    if ( (state==POWERED_ASCENT) && (Data100[dataIndex].run_time > BURN_TIME) ){
+    if ( (state==POWERED_ASCENT) && ( millis() > (BURN_TIME + liftoff_time)) ){
       SET_STATE(UNPOWERED_ASCENT);
     }
     if ( (state==UNPOWERED_ASCENT) && (Apogee_Passed == 1) ){
@@ -1309,7 +1380,8 @@ void loop() {
     fallCount++;
     if(dataIndex%100 == 0){   //mod 100 -> 1Hz
       Data1[dataIndex/100].fallRate= fallCount / ( (millis() - startTime) / 1000.0);
-      Data1[dataIndex/100].fallT= ( thisLoopMicros - micros() ) / 1000.0;
+      //Data1[dataIndex/100].fallT= (millis() - thisLoopMillis)*1000.0;        
+      Data1[dataIndex/100].fallT= ( micros() - thisLoopMicros );
     }
     //*****END Fall Section****************************************************************
 
@@ -1327,14 +1399,16 @@ void loop() {
     
       //*****Read Section**************************************************************
       thisLoopMicros= micros();
+      thisLoopMillis= millis();
   
       BEGIN_READ
       READ_FLAG(c) {
         heartbeat();
       }
-      READ_FLAG(r) {
+      READ_FLAG(r) {      //@@@@@:r&&&&& if manually sending commands
         TELEMETRY_SERIAL.println(F("Resetting board"));
-        reset();
+        //reset();
+        CPU_RESTART;
       }
       READ_FLAG(s) {
         start_countdown();
@@ -1344,24 +1418,28 @@ void loop() {
         abort_autosequence();
       }
       READ_FIELD(P1cmd, "%d", cmd) {
-        Data100[dataIndex].P1_setting= cmd;
+        P1_setting= cmd;
         digitalWrite(PYRO1,cmd);
       }
       READ_FIELD(P2cmd, "%d", cmd) {
-        Data100[dataIndex].P2_setting= cmd;
+        P2_setting= cmd;
         digitalWrite(PYRO2,cmd);
       }
       READ_FIELD(P3cmd, "%d", cmd) {
-        Data100[dataIndex].P3_setting= cmd;
+        P3_setting= cmd;
         digitalWrite(PYRO3,cmd);
       }
       READ_FIELD(P4cmd, "%d", cmd) {
-        Data100[dataIndex].P4_setting= cmd;
+        P4_setting= cmd;
         digitalWrite(PYRO4,cmd);
       }
       READ_FIELD(P5cmd, "%d", cmd) {
-        Data100[dataIndex].P5_setting= cmd;
+        P5_setting= cmd;
         digitalWrite(PYRO5,cmd);
+      }
+      READ_FIELD(P5Vcmd, "%d", cmd) {
+        P5V_setting= cmd;
+        digitalWrite(PYRO5V,cmd);
       }
       READ_FIELD(Launch_ALT, "%f", val) {
         Launch_ALT= val;
@@ -1373,18 +1451,18 @@ void loop() {
         ATST= val;
       }
       READ_FIELD(launch_lat, "%f", val) {
-        launch_lat= val;
+        //launch_lat= val;
       }
       READ_FIELD(launch_lon, "%f", val) {
-        launch_lon= val;
+        //launch_lon= val;
       }
       READ_FIELD(land_lat, "%f", val) {
-        land_lat= val;
+        //land_lat= val;
       }
       READ_FIELD(land_lon, "%f", val) {
-        land_lon= val;
-      }
-  
+        //land_lon= val;
+      }            
+      
       READ_DEFAULT(data_name, data) {
         TELEMETRY_SERIAL.print(F("Invalid data field recieved: "));
         TELEMETRY_SERIAL.print(data_name);
@@ -1392,6 +1470,18 @@ void loop() {
         TELEMETRY_SERIAL.println(data);
       }
       END_READ
+
+      Data1[dataIndex/100].P1_setting= P1_setting;
+      Data1[dataIndex/100].P2_setting= P2_setting;
+      Data1[dataIndex/100].P3_setting= P3_setting;
+      Data1[dataIndex/100].P4_setting= P4_setting;
+      Data1[dataIndex/100].P5_setting= P5_setting;
+
+      Data1[dataIndex/100].sdT= sdT;
+      Data1[dataIndex/100].sdRate= sdRate;
+      
+      //NEED TO ADD THE ABILITY TO FIRE PYRO 5V
+      Data1[dataIndex/100].P5V_setting= P5V_setting;
       
       //Read battery voltages
       reading= analogRead(Batt_V);
@@ -1402,7 +1492,8 @@ void loop() {
       readCount++;
       if(dataIndex%100 == 0){   //mod 100 -> 1Hz, keep this just in case the read section is moved from 1Hz
         Data1[dataIndex/100].readRate= readCount / ( (millis() - startTime) / 1000.0);
-        Data1[dataIndex/100].readT= ( thisLoopMicros - micros() ) / 1000.0;
+        //Data1[dataIndex/100].readT= (millis() - thisLoopMillis)*1000.0;
+        Data1[dataIndex/100].readT= ( micros() - thisLoopMicros );
       }
       //*****END Read Section**************************************************************
       
@@ -1413,7 +1504,8 @@ void loop() {
     if(dataIndex%25 == 0){
       //*****Downlink Section****************************************************************
       thisLoopMicros= micros();
-    
+      thisLoopMillis= millis();
+      
       if (millis() > (heartbeat_time + HEARTBEAT_TIMEOUT) ) {
         //TELEMETRY_SERIAL.println(F("Loss of data link"));
         Data4[dataIndex/25].link2ground=0;
@@ -1424,9 +1516,19 @@ void loop() {
       }
       
       BEGIN_SEND
-      SEND_VECTOR_ITEM(euler_angle  , Data100[dataIndex].euler)
-      SEND_VECTOR_ITEM(gyro         , Data100[dataIndex].gyroscope)
-      SEND_VECTOR_ITEM(acceleration , Data100[dataIndex].Acc)
+        //don't really need to send euler angles...
+      //SEND_VECTOR_ITEM(euler_angle  , Data100[dataIndex].euler)
+      //SEND_ITEM(eX                , Data100[dataIndex].eulerX)
+      //SEND_ITEM(eY                , Data100[dataIndex].eulerY)
+      //SEND_ITEM(eZ                , Data100[dataIndex].eulerZ)
+      //SEND_VECTOR_ITEM(gyro         , Data100[dataIndex].gyroscope)
+      SEND_ITEM(gyrX                , Data100[dataIndex].gyroX)
+      SEND_ITEM(gyrY                , Data100[dataIndex].gyroY)
+      SEND_ITEM(gyrZ                , Data100[dataIndex].gyroZ)
+      //SEND_VECTOR_ITEM(acceleration , Data100[dataIndex].Acc)
+      SEND_ITEM(aX                , Data100[dataIndex].accX)
+      SEND_ITEM(aY                , Data100[dataIndex].accY)
+      SEND_ITEM(aZ                , Data100[dataIndex].accZ)
       SEND_ITEM(bmp_alt             , Data100[dataIndex].bmp_alt)
       SEND_ITEM(bno_alt             , Data100[dataIndex].bno_alt)
       SEND_ITEM(roll                , Data100[dataIndex].roll)
@@ -1439,12 +1541,13 @@ void loop() {
       SEND_ITEM(oY                  , Data100[dataIndex].oY)
       SEND_ITEM(oZ                  , Data100[dataIndex].oZ)
       SEND_ITEM(ss                  , Data100[dataIndex].ss)
-      SEND_ITEM(P1_setting          , Data100[dataIndex].P1_setting)
-      SEND_ITEM(P2_setting          , Data100[dataIndex].P2_setting)
-      SEND_ITEM(P3_setting          , Data100[dataIndex].P3_setting)
-      SEND_ITEM(P4_setting          , Data100[dataIndex].P4_setting)
-      SEND_ITEM(P5_setting          , Data100[dataIndex].P5_setting)
-      SEND_ITEM(Apogee_Passed       , Data100[dataIndex].Apogee_Passed)
+      SEND_ITEM(P1_setting          , P1_setting)
+      SEND_ITEM(P2_setting          , P2_setting)
+      SEND_ITEM(P3_setting          , P3_setting)
+      SEND_ITEM(P4_setting          , P4_setting)
+      SEND_ITEM(P5_setting          , P5_setting)
+      SEND_ITEM(P5V_setting         , P5V_setting)
+      SEND_ITEM(Apogee_Passed       , Apogee_Passed)
       SEND_ITEM(run_time            , Data100[dataIndex].run_time)
 
       //Not 100Hz- integer division will occur but shouldn't cause a fault
@@ -1452,6 +1555,8 @@ void loop() {
       SEND_ITEM(gps_vel             , Data25[dataIndex/4].gps_vel)
       SEND_ITEM(gps_dir             , Data25[dataIndex/4].gps_dir)
       */
+
+      
       SEND_ITEM(x_from_launch       , Data25[dataIndex/4].x_from_launch)
       SEND_ITEM(y_from_launch       , Data25[dataIndex/4].y_from_launch)
       SEND_ITEM(dir_from_launch     , Data25[dataIndex/4].dir_from_launch)
@@ -1468,7 +1573,11 @@ void loop() {
       SEND_ITEM(gps_alt             , Data25[dataIndex/4].gps_alt)
       SEND_ITEM(sats                , Data25[dataIndex/4].SIV)
       SEND_ITEM(hdp                 , Data25[dataIndex/4].PDOP)
-      SEND_VECTOR_ITEM(magnetometer , Data10[dataIndex/10].magnetometer)
+        //literally no reason to send mag data
+      //SEND_VECTOR_ITEM(magnetometer , Data10[dataIndex/10].magnetometer)
+      //SEND_ITEM(mx                  , Data10[dataIndex/10].mx)                         
+      //SEND_ITEM(my                  , Data10[dataIndex/10].my)
+      //SEND_ITEM(mz                  , Data10[dataIndex/10].mz)
       SEND_ITEM(l2g                 , Data4[dataIndex/25].link2ground)
       SEND_ITEM(tIMU                , Data1[dataIndex/100].temp)                         //BNO055 Temp
       SEND_ITEM(vb                  , Data1[dataIndex/100].vbatt)
@@ -1532,7 +1641,8 @@ void loop() {
       radioCount++;
       if(dataIndex%100 == 0){   //mod 100 -> 1Hz
         Data1[dataIndex/100].radioRate= radioCount / ( (millis() - startTime) / 1000.0);
-        Data1[dataIndex/100].radioT= ( thisLoopMicros - micros() ) / 1000.0;
+        //Data1[dataIndex/100].radioT= (millis() - thisLoopMillis)*1000.0;  
+        Data1[dataIndex/100].radioT= ( micros() - thisLoopMicros);
       }
       //*****END Downlink Section****************************************************************
     }
@@ -1541,6 +1651,7 @@ void loop() {
     //*****SD Logging Section (every Num_Datapoints*10ms)****************************************************************
     if( (dataIndex == (Num_Datapoints-1)) && (state != LANDED) ){  //if the flash memory data structure arrays are full
       thisLoopMicros= micros();
+      thisLoopMillis= millis();
       
       //fix names at top of csv file...
       
@@ -1557,6 +1668,7 @@ void loop() {
         dataFile.print(second());
         */
 
+        
         dataFile.print(Data100[dataIndex].run_time);      dataFile.print(',');      //run_time (T=0 at liftoff)
         if((i%100) == 0){       //1Hz
           dataFile.print(Data1[dataIndex/100].y);           dataFile.print('/');    
@@ -1565,6 +1677,9 @@ void loop() {
           dataFile.print(Data1[dataIndex/100].h);           dataFile.print(':');
           dataFile.print(Data1[dataIndex/100].m);           dataFile.print(':');
           dataFile.print(Data1[dataIndex/100].s);
+        }
+        else{
+          dataFile.print(',');
         }
         
         //writing sensor values
@@ -1583,19 +1698,26 @@ void loop() {
         WRITE_CSV_ITEM(Data100[i].bmp_alt)
         WRITE_CSV_ITEM(Data100[i].bno_alt)
         //WRITE_CSV_VECTOR_ITEM(gyroscope)
-        WRITE_CSV_ITEM(Data100[i].Acc.x())  
-        WRITE_CSV_ITEM(Data100[i].Acc.y())
-        WRITE_CSV_ITEM(Data100[i].Acc.z())
-        WRITE_CSV_ITEM(Data100[i].gyroscope.x())
-        WRITE_CSV_ITEM(Data100[i].gyroscope.y())
-        WRITE_CSV_ITEM(Data100[i].gyroscope.z())
+        WRITE_CSV_ITEM(Data100[i].gyroX)
+        WRITE_CSV_ITEM(Data100[i].gyroY)
+        WRITE_CSV_ITEM(Data100[i].gyroZ)
         //WRITE_CSV_VECTOR_ITEM(Acc)
+        WRITE_CSV_ITEM(Data100[i].accX)
+        WRITE_CSV_ITEM(Data100[i].accY)
+        WRITE_CSV_ITEM(Data100[i].accZ)
         WRITE_CSV_ITEM(Data100[i].bmp_pressure)
-        WRITE_CSV_ITEM(Data100[i].q1.w())
-        WRITE_CSV_ITEM(Data100[i].q1.x())
-        WRITE_CSV_ITEM(Data100[i].q1.y())
-        WRITE_CSV_ITEM(Data100[i].q1.z())
-        WRITE_CSV_VECTOR_ITEM(Data100[i].euler)
+        WRITE_CSV_ITEM(Data100[i].qW)
+        WRITE_CSV_ITEM(Data100[i].qX)
+        WRITE_CSV_ITEM(Data100[i].qY)
+        WRITE_CSV_ITEM(Data100[i].qZ)
+        WRITE_CSV_ITEM(Data100[i].oriQuatW)
+        WRITE_CSV_ITEM(Data100[i].oriQuatX)
+        WRITE_CSV_ITEM(Data100[i].oriQuatY)
+        WRITE_CSV_ITEM(Data100[i].oriQuatZ)
+        //WRITE_CSV_VECTOR_ITEM(Data100[i].euler)
+        WRITE_CSV_ITEM(Data100[i].eulerX)
+        WRITE_CSV_ITEM(Data100[i].eulerY)
+        WRITE_CSV_ITEM(Data100[i].eulerZ)
         WRITE_CSV_ITEM(Data100[i].state)
         WRITE_CSV_ITEM(Data100[i].Apogee_Passed)
         WRITE_CSV_ITEM(Data100[i].bno_descending)
@@ -1613,22 +1735,38 @@ void loop() {
           WRITE_CSV_ITEM(Data25[i/4].gps_vel)
           WRITE_CSV_ITEM(Data25[i/4].gps_dir)
           */
+
+          /*
           WRITE_CSV_ITEM(Data25[i/4].x_from_launch)
           WRITE_CSV_ITEM(Data25[i/4].y_from_launch)
           WRITE_CSV_ITEM(Data25[i/4].dir_from_launch)
           WRITE_CSV_ITEM(Data25[i/4].xy_to_land)
-          WRITE_CSV_ITEM(Data25[i/4].xy_dir_to_land)
+          WRITE_CSV_ITEM(Data25[i/4].dir_to_land)    //need to change xy_dir_to_land to dir_to_land
           WRITE_CSV_ITEM(Data25[i/4].x_to_land)
           WRITE_CSV_ITEM(Data25[i/4].y_to_land)
+          */
           WRITE_CSV_ITEM(Data25[i/4].gps_descending)
+          
+        }
+        else{
+          dataFile.print(',');
         }
 
         if((i%10) == 0){       //10Hz
-          WRITE_CSV_VECTOR_ITEM(Data10[i/10].magnetometer)
+          //WRITE_CSV_VECTOR_ITEM(Data10[i/10].magnetometer)
+          WRITE_CSV_ITEM(Data10[i/10].mx)
+          WRITE_CSV_ITEM(Data10[i/10].my)
+          WRITE_CSV_ITEM(Data10[i/10].mz)
+        }
+        else{
+          dataFile.print(',');
         }
 
         if((i%25) == 0){       //4Hz
           WRITE_CSV_ITEM(Data4[i/25].link2ground)
+        }
+        else{
+          dataFile.print(',');
         }
 
         if((i%100) == 0){       //1Hz
@@ -1653,7 +1791,17 @@ void loop() {
           WRITE_CSV_ITEM(Data1[i/100].bnoT)
           WRITE_CSV_ITEM(Data1[i/100].sdT)
           WRITE_CSV_ITEM(Data1[i/100].fallT)
-          WRITE_CSV_ITEM(Data1[i/100].oriT) 
+          WRITE_CSV_ITEM(Data1[i/100].oriT)
+          //WRITE_CSV_ITEM(Data1[i/100].loopIteration)
+          WRITE_CSV_ITEM(Data1[i/100].P1_setting)
+          WRITE_CSV_ITEM(Data1[i/100].P2_setting)
+          WRITE_CSV_ITEM(Data1[i/100].P3_setting)
+          WRITE_CSV_ITEM(Data1[i/100].P4_setting)
+          WRITE_CSV_ITEM(Data1[i/100].P5_setting)
+          WRITE_CSV_ITEM(Data1[i/100].P5V_setting)
+        }
+        else{
+          dataFile.print(',');
         }
         
         //CANNOT WRITE COSTANTS, not logged over time in array form...
@@ -1664,10 +1812,13 @@ void loop() {
       dataFile.flush();     //ensures data is written to sd card (might need to put inside the for loop)
       
       sdCount++;
-      if(dataIndex%100 == 0){   //mod 100 -> 1Hz
-        Data1[dataIndex/100].sdRate= sdCount / ( (millis() - startTime) / 1000.0);
-        Data1[dataIndex/100].sdT= ( thisLoopMicros - micros() ) / 1000.0;
-      }    
+      //if(dataIndex%100 == 0){   //mod 100 -> 1Hz      //this only runs on the last dataIndex!!!
+        //Data1[dataIndex/100].sdRate= sdCount / ( (millis() - startTime) / 1000.0);
+        sdRate= sdCount / ( (millis() - startTime) / 1000.0);
+        //Data1[dataIndex/100].sdT= (millis() - thisLoopMillis)*1000.0;   
+        //Data1[dataIndex/100].sdT= ( micros() - thisLoopMicros );            //this one is wonky
+        sdT= ( micros() - thisLoopMicros );
+      //}    
     }
     else if( (dataIndex == (Num_Datapoints-1)) && (DataWrittenOnLanding == 0) ){
       DataWrittenOnLanding= 1;    //can only do this once upon landing
@@ -1686,6 +1837,7 @@ void loop() {
         dataFile.print(second());
         */
 
+        
         dataFile.print(Data100[dataIndex].run_time);      dataFile.print(',');      //run_time (T=0 at liftoff)
         if((i%100) == 0){       //1Hz
           dataFile.print(Data1[dataIndex/100].y);           dataFile.print('/');    
@@ -1694,6 +1846,9 @@ void loop() {
           dataFile.print(Data1[dataIndex/100].h);           dataFile.print(':');
           dataFile.print(Data1[dataIndex/100].m);           dataFile.print(':');
           dataFile.print(Data1[dataIndex/100].s);
+        }
+        else{
+          dataFile.print(',');
         }
         
         //writing sensor values
@@ -1712,19 +1867,26 @@ void loop() {
         WRITE_CSV_ITEM(Data100[i].bmp_alt)
         WRITE_CSV_ITEM(Data100[i].bno_alt)
         //WRITE_CSV_VECTOR_ITEM(gyroscope)
-        WRITE_CSV_ITEM(Data100[i].Acc.x())  
-        WRITE_CSV_ITEM(Data100[i].Acc.y())
-        WRITE_CSV_ITEM(Data100[i].Acc.z())
-        WRITE_CSV_ITEM(Data100[i].gyroscope.x())
-        WRITE_CSV_ITEM(Data100[i].gyroscope.y())
-        WRITE_CSV_ITEM(Data100[i].gyroscope.z())
+        WRITE_CSV_ITEM(Data100[i].gyroX)
+        WRITE_CSV_ITEM(Data100[i].gyroY)
+        WRITE_CSV_ITEM(Data100[i].gyroZ)
         //WRITE_CSV_VECTOR_ITEM(Acc)
+        WRITE_CSV_ITEM(Data100[i].accX)
+        WRITE_CSV_ITEM(Data100[i].accY)
+        WRITE_CSV_ITEM(Data100[i].accZ)
         WRITE_CSV_ITEM(Data100[i].bmp_pressure)
-        WRITE_CSV_ITEM(Data100[i].q1.w())
-        WRITE_CSV_ITEM(Data100[i].q1.x())
-        WRITE_CSV_ITEM(Data100[i].q1.y())
-        WRITE_CSV_ITEM(Data100[i].q1.z())
-        WRITE_CSV_VECTOR_ITEM(Data100[i].euler)
+        WRITE_CSV_ITEM(Data100[i].qW)
+        WRITE_CSV_ITEM(Data100[i].qX)
+        WRITE_CSV_ITEM(Data100[i].qY)
+        WRITE_CSV_ITEM(Data100[i].qZ)
+        WRITE_CSV_ITEM(Data100[i].oriQuatW)
+        WRITE_CSV_ITEM(Data100[i].oriQuatX)
+        WRITE_CSV_ITEM(Data100[i].oriQuatY)
+        WRITE_CSV_ITEM(Data100[i].oriQuatZ)
+        //WRITE_CSV_VECTOR_ITEM(Data100[i].euler)
+        WRITE_CSV_ITEM(Data100[i].eulerX)
+        WRITE_CSV_ITEM(Data100[i].eulerY)
+        WRITE_CSV_ITEM(Data100[i].eulerZ)
         WRITE_CSV_ITEM(Data100[i].state)
         WRITE_CSV_ITEM(Data100[i].Apogee_Passed)
         WRITE_CSV_ITEM(Data100[i].bno_descending)
@@ -1742,22 +1904,38 @@ void loop() {
           WRITE_CSV_ITEM(Data25[i/4].gps_vel)
           WRITE_CSV_ITEM(Data25[i/4].gps_dir)
           */
+
+          /*
           WRITE_CSV_ITEM(Data25[i/4].x_from_launch)
           WRITE_CSV_ITEM(Data25[i/4].y_from_launch)
           WRITE_CSV_ITEM(Data25[i/4].dir_from_launch)
           WRITE_CSV_ITEM(Data25[i/4].xy_to_land)
-          WRITE_CSV_ITEM(Data25[i/4].xy_dir_to_land)
+          WRITE_CSV_ITEM(Data25[i/4].dir_to_land)
           WRITE_CSV_ITEM(Data25[i/4].x_to_land)
           WRITE_CSV_ITEM(Data25[i/4].y_to_land)
+          */
           WRITE_CSV_ITEM(Data25[i/4].gps_descending)
+          
+        }
+        else{
+          dataFile.print(',');
         }
 
         if((i%10) == 0){       //10Hz
-          WRITE_CSV_VECTOR_ITEM(Data10[i/10].magnetometer)
+          //WRITE_CSV_VECTOR_ITEM(Data10[i/10].magnetometer)
+          WRITE_CSV_ITEM(Data10[i/10].mx)
+          WRITE_CSV_ITEM(Data10[i/10].my)
+          WRITE_CSV_ITEM(Data10[i/10].mz)
+        }
+        else{
+          dataFile.print(',');
         }
 
         if((i%25) == 0){       //4Hz
           WRITE_CSV_ITEM(Data4[i/25].link2ground)
+        }
+        else{
+          dataFile.print(',');
         }
 
         if((i%100) == 0){       //1Hz
@@ -1782,7 +1960,17 @@ void loop() {
           WRITE_CSV_ITEM(Data1[i/100].bnoT)
           WRITE_CSV_ITEM(Data1[i/100].sdT)
           WRITE_CSV_ITEM(Data1[i/100].fallT)
-          WRITE_CSV_ITEM(Data1[i/100].oriT) 
+          WRITE_CSV_ITEM(Data1[i/100].oriT)
+          //WRITE_CSV_ITEM(Data1[i/100].loopIteration)
+          WRITE_CSV_ITEM(Data1[i/100].P1_setting)
+          WRITE_CSV_ITEM(Data1[i/100].P2_setting)
+          WRITE_CSV_ITEM(Data1[i/100].P3_setting)
+          WRITE_CSV_ITEM(Data1[i/100].P4_setting)
+          WRITE_CSV_ITEM(Data1[i/100].P5_setting)
+          WRITE_CSV_ITEM(Data1[i/100].P5V_setting)
+        }
+        else{
+          dataFile.print(',');
         }
         
         //CANNOT WRITE COSTANTS, not logged over time in array form...
@@ -1799,6 +1987,6 @@ void loop() {
     Timer100Hz= millis();
   }
 
-  loopIteration++;
+  //loopIteration++;
   
 }
