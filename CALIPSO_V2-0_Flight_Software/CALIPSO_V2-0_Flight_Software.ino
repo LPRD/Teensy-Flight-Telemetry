@@ -99,7 +99,6 @@
 #define PWM18 23
 #define PWM19 22
 #define PWM20 19
-#define NumPrevDataPtIndices 500   //Number of previous data point indices that will be stored, 100 corresponds to 1 second
 
 //Telem Functions
 #define SEND_VECTOR_ITEM(field, value)\
@@ -134,6 +133,7 @@ state_t state = STAND_BY;
 //**********Define data types that holds important information***************************************
 
 #define Num_Datapoints 1000      //hold the last 100 seconds of data... must be ~ < 20,000 (23,000 for initial commit)
+#define NumPrevDataPtIndices 500   //Number of previous data point indices that will be stored, 100 corresponds to 1 second
 /*  If Num_Datapoints is set to be too large (take up too much flash memory):
       section `.text.progmem' will not fit in region `FLASH'
       c:/program files (x86)/arduino/hardware/tools/arm/bin/../lib/gcc/arm-none-eabi/5.4.1/../../../../arm-none-eabi/bin/ld.exe: region `FLASH' overflowed by 26119452 bytes
@@ -148,7 +148,8 @@ uint32_t dataLast[NumPrevDataPtIndices];   //arry that stores the indices of the
 struct data100hz_t{
   //Flow Control
   //uint64_t loopIteration;         //how many times the void loop has iterated (not super important, just interesting)
-  state_t state;                  //Data100[dataIndex].state= state; 
+  //state_t state;                  //Data100[dataIndex].state= state;
+  int state; 
   //Logistical
   bool ss;                        //ss is sensor status
   uint32_t abort_time;
@@ -192,7 +193,8 @@ struct data100hz_t{
 struct data25hz_t{
   //GPS
   bool gps_descending;
-  int SIV, fixType;
+  //int SIV, fixType;
+  uint8_t fixType, SIV;   //uint8_t in lib
   float PDOP;                             //Positional diminution of precision
   double gps_lat, gps_lon, gps_alt;
     //Below values are Cardinal= in the N/E/S/W plane, NO up/down component!
@@ -231,21 +233,22 @@ struct data1hz_t{
 };
 
 //Create arrays of various data type objects to store the last x seconds of data in flash memory
+
 /*
-data100hz_t Data100[Num_Datapoints] PROGMEM;
+data100hz_t Data100[Num_Datapoints] PROGMEM;      //DO NOT USE PROGMEM- not writeable, not rated for many r/w cycles anyways
 data25hz_t  Data25[Num_Datapoints/4] PROGMEM;
 data10hz_t  Data10[Num_Datapoints/10] PROGMEM;
 data4hz_t   Data4[Num_Datapoints/25] PROGMEM;
 data1hz_t   Data1[Num_Datapoints/100] PROGMEM;
 */
 
-
+// /*
 data100hz_t Data100[Num_Datapoints] ;
 data25hz_t  Data25[Num_Datapoints/4] ;
 data10hz_t  Data10[Num_Datapoints/10] ;
 data4hz_t   Data4[Num_Datapoints/25] ;
 data1hz_t   Data1[Num_Datapoints/100] ;
-
+// */
 
 
 
@@ -1084,12 +1087,12 @@ void loop() {
     //****Update States w/ GPS Measurement*********
     if(dataIndex%4 == 0){
           //thisLoopMicros= micros();
-    thisLoopMicros2= micros();
+      thisLoopMicros2= micros();
       //thisLoopMillis= millis();
 
       Data25[dataIndex/4].fixType = myGPS.getFixType();
       Data25[dataIndex/4].SIV = myGPS.getSIV();
-      thisLoopMicros2= micros();
+      //thisLoopMicros2= micros();
       Data25[dataIndex/4].PDOP = myGPS.getPDOP() / 100.0;  //m
       Data25[dataIndex/4].gps_alt= myGPS.getAltitude() / 1.0E3; //m ASL
       Data25[dataIndex/4].gps_lon= myGPS.getLongitude() / 1.0E7;
@@ -1555,8 +1558,6 @@ void loop() {
       SEND_ITEM(gps_vel             , Data25[dataIndex/4].gps_vel)
       SEND_ITEM(gps_dir             , Data25[dataIndex/4].gps_dir)
       */
-
-      
       SEND_ITEM(x_from_launch       , Data25[dataIndex/4].x_from_launch)
       SEND_ITEM(y_from_launch       , Data25[dataIndex/4].y_from_launch)
       SEND_ITEM(dir_from_launch     , Data25[dataIndex/4].dir_from_launch)
@@ -1597,7 +1598,7 @@ void loop() {
       SEND_ITEM(rT                  , Data1[dataIndex/100].readT)
       SEND_ITEM(bmpT                , Data1[dataIndex/100].bmpT)
       SEND_ITEM(bnoT                , Data1[dataIndex/100].bnoT)
-      SEND_ITEM(sdT                 , Data1[dataIndex/100].sdT)
+      SEND_ITEM(sdT                 , sdT)                          //just send the raw value itself
       SEND_ITEM(fT                  , Data1[dataIndex/100].fallT)
       SEND_ITEM(oT                  , Data1[dataIndex/100].oriT)
 
