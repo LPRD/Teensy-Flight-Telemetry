@@ -104,6 +104,7 @@ state_t state = STAND_BY;
 
 //*******************Define data types that holds important information***********************************************
 
+//#define BUFFER_LENGTH 1000      //redefine BUFFER_LENGTH in wire lib
 #define Num_Datapoints 1000       //hold the last Num_Datapoints*100ms data (NEEDS TO BE DIVISIBLE BY 25, 10, 4, 1!!!!!)
 uint64_t Timer100Hz= 0;           //millis timer that keeps track of the 10ms timer loop
 uint32_t dataLoopIteration= 0;    //number of 10ms iterations have passed since starting void loop
@@ -488,10 +489,11 @@ void setup() {
   
   //Start I2C
   //Wire.setSDA(17); Wire.setSCL(16); //use SDA1, SCL1 for Teensy 4.1
-  Wire1.begin();   
+  Wire1.begin();              //BNO, GPS, BMI
   Wire1.setClock(400000);
   delay(500);
-  Wire.begin();
+  Wire.begin();               //uC comm bus
+  Wire2.begin();              //BNO055 backup
   //Wire.setClock(400000);
   delay(1000);
   
@@ -605,6 +607,7 @@ void setup() {
   }
   
   //Pin Initialization
+  pinMode(LED, OUTPUT); 
   pinMode(PYRO1, OUTPUT);
   pinMode(PYRO2, OUTPUT);
   pinMode(PYRO3, OUTPUT);
@@ -1341,12 +1344,17 @@ void loop() {
       AddData[0]= '\0';
       AddData2[0]= '\0';
       
+//      Wire.beginTransmission(11); // transmit to device #11
+//      Wire.write(SendData);
+//      //Wire.printf("%s",SendData);     //another option
+//      //Wire.printf(" hello??? %f \n", 3.1415);
+//      Wire.endTransmission();    // stop transmitting
+//
       Wire.beginTransmission(11); // transmit to device #11
-      Wire.write(SendData);
-      //Wire.printf("%s",SendData);     //another option
-      Wire.printf(" hello??? %f \n", 3.1415);
+      Wire.write("abcdefghijklmnopqrstuvwxyz1234567890____abcdefghijklmnopqrstuvwxyz1234567890____qqq", 15);
+      Wire.write("\nhello is anyone there????");
       Wire.endTransmission();    // stop transmitting
-  
+      
       if( (dataIndex%100) == 0){
       TELEMETRY_SERIAL.println(SendData);   //debugging, but adds lag :(
       //TELEMETRY_SERIAL.println();
@@ -1374,7 +1382,14 @@ void loop() {
       Data1[dataIndex/100].h= hour();
       Data1[dataIndex/100].m= minute();
       Data1[dataIndex/100].s= second();
-    
+
+      //Read battery voltages
+      reading= analogRead(Batt_V);
+      Data1[dataIndex/100].vbatt= reading*(3.3/1023.00)* voltage_divider_ratio;
+      reading= analogRead(Grid_V);
+      Data1[dataIndex/100].vgrid= reading*(3.3/1023.00)* voltage_divider_ratio;
+
+      
       //*****Read Section**************************************************************
       /*
       thisLoopMicros= micros();
